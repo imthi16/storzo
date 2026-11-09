@@ -174,3 +174,140 @@ def test_unicode_download_filename(monkeypatch, tmp_path):
             assert header.endswith("filename*=UTF-8''" + quote(name, safe=''))
     finally:
         c.__exit__(None, None, None)
+
+
+# Exercise the real routing/dependency chain with an isolated fake data plane.
+import pytest
+from fastapi.routing import APIRoute
+
+
+@pytest.fixture
+def security_client(monkeypatch, tmp_path):
+    c, fake = setup_client(monkeypatch, tmp_path)
+    try:
+        yield c, fake
+    finally:
+        c.__exit__(None, None, None)
+
+
+READ_ROUTES = [route.path for route in main.app.routes
+               if isinstance(route, APIRoute) and 'GET' in route.methods
+               and not route.path.startswith('/api/health/')]
+
+
+@pytest.mark.parametrize('route', READ_ROUTES)
+def test_every_read_route_requires_login(security_client, route):
+    c, _ = security_client
+    response = c.get(route.replace('{bucket}', 'demo-images'),
+                     params={'bucket': 'demo-images', 'key': 'image.png'})
+    assert response.status_code == 401, (route, response.text)
+    assert response.json()['detail'] == 'Login required'
+
+
+@pytest.mark.parametrize('route', ['/api/health/live', '/api/health/ready'])
+def test_health_routes_intentionally_public(security_client, route):
+    c, _ = security_client
+    assert c.get(route).status_code == 200
+
+
+@pytest.mark.parametrize('token', [None, 'wrong-token'])
+@pytest.mark.parametrize('operation', ['create_bucket', 'delete_bucket', 'upload', 'delete_object', 'logout'])
+def test_all_writes_require_login_csrf(security_client, token, operation):
+    c, fake = security_client
+    login(c)
+    fake.buckets['demo-images']['keep.png'] = (b'keep', 'image/png')
+    before = {name: dict(objects) for name, objects in fake.buckets.items()}
+    headers = {} if token is None else {'x-csrf-token': token}
+    if operation == 'create_bucket':
+        response = c.post('/api/buckets', json={'name': 'new-bucket'}, headers=headers)
+    elif operation == 'delete_bucket':
+        response = c.delete('/api/buckets/demo-images', headers=headers)
+    elif operation == 'upload':
+        response = c.post('/api/objects/upload', data={'bucket': 'demo-images', 'key': 'new.png'},
+                          files={'file': ('new.png', b'data', 'image/png')}, headers=headers)
+    elif operation == 'delete_object':
+        response = c.delete('/api/objects', params={'bucket': 'demo-images', 'key': 'keep.png'}, headers=headers)
+    else:
+        response = c.post('/api/auth/logout', headers=headers)
+    assert response.status_code == 403, response.text
+    assert response.json()['detail'] == 'CSRF validation failed'
+    assert fake.buckets == before
+    assert c.get('/api/auth/me').status_code == 200
+    assert [row['action'] for row in c.get('/api/audit').json()['items']] == ['login']
+
+
+BAD_BUCKETS = ['../demo', 'demo/../other', '/demo', r'demo\other', '..',
+               'demo..other', 'demo\x00other', '%2e%2e', 'demo.-other', 'demo-.other']
+BAD_KEYS = ['', '../secret', 'images/../../secret', 'images/../secret', '/etc/passwd',
+            r'images\..\secret', 'images/\x00secret', 'a' * 1025, 'é' * 513]
+
+
+@pytest.mark.parametrize('value', BAD_BUCKETS)
+def test_safe_bucket_rejects_traversal(value):
+    from fastapi import HTTPException
+    with pytest.raises(HTTPException) as exc:
+        main.safe_bucket(value)
+    assert exc.value.status_code == 400
+
+
+@pytest.mark.parametrize('value', BAD_KEYS)
+def test_safe_key_rejects_traversal(value):
+    from fastapi import HTTPException
+    with pytest.raises(HTTPException) as exc:
+        main.safe_key(value)
+    assert exc.value.status_code == 400
+
+
+@pytest.mark.parametrize('bucket', BAD_BUCKETS)
+def test_bucket_creation_rejects_traversal_before_s3(security_client, bucket):
+    c, fake = security_client
+    csrf = login(c)
+    response = c.post('/api/buckets', json={'name': bucket}, headers={'x-csrf-token': csrf})
+    assert response.status_code == 400, response.text
+    assert set(fake.buckets) == {'demo-images'}
+
+
+@pytest.mark.parametrize('key', BAD_KEYS)
+@pytest.mark.parametrize('route', ['download', 'preview', 'thumbnail', 'presign', 'delete', 'upload', 'list'])
+def test_object_routes_reject_traversal_before_s3(security_client, key, route):
+    c, fake = security_client
+    csrf = login(c)
+    params = {'bucket': 'demo-images', 'key': key}
+    headers = {'x-csrf-token': csrf}
+    if route == 'upload':
+        response = c.post('/api/objects/upload', data=params,
+                          files={'file': ('a.png', b'image', 'image/png')}, headers=headers)
+        # Multipart empty required strings are rejected by request validation.
+        expected = 422 if not key else 400
+    elif route == 'delete':
+        response = c.delete('/api/objects', params=params, headers=headers)
+        expected = 400
+    elif route == 'list':
+        # Empty prefix intentionally means list bucket root.
+        response = c.get('/api/buckets/demo-images/objects', params={'prefix': key})
+        expected = 200 if not key else 400
+    else:
+        response = c.get('/api/objects/' + route, params=params)
+        expected = 400
+    assert response.status_code == expected, response.text
+    assert not fake.buckets['demo-images']
+    assert [row['action'] for row in c.get('/api/audit').json()['items']] == ['login']
+
+
+def test_upload_limit_rejects_before_s3(security_client, monkeypatch):
+    c, fake = security_client
+    csrf = login(c)
+    monkeypatch.setattr(main, 'MAX_UPLOAD_MB', 1)
+    content = b'x' * (main.MAX_UPLOAD_MB * 1024 * 1024)
+    response = c.post('/api/objects/upload', data={'bucket': 'demo-images', 'key': 'too-big.bin'},
+                      files={'file': ('large.bin', content + b'x', 'application/octet-stream')},
+                      headers={'x-csrf-token': csrf})
+    assert response.status_code == 413, response.text
+    assert response.json()['detail'] == 'Upload exceeds 1 MB limit'
+    assert not fake.buckets['demo-images']
+    assert [row['action'] for row in c.get('/api/audit').json()['items']] == ['login']
+    response = c.post('/api/objects/upload', data={'bucket': 'demo-images', 'key': 'at-limit.bin'},
+                      files={'file': ('large.bin', content, 'application/octet-stream')},
+                      headers={'x-csrf-token': csrf})
+    assert response.status_code == 201, response.text
+    assert fake.buckets['demo-images']['at-limit.bin'][0] == content

@@ -1,103 +1,187 @@
 #!/usr/bin/env python3
-"""Backup -> restore drill against Docker Compose (non-destructive).
+"""Cold storage + SQLite audit backup/restore drill; live volumes are mounted read-only.
 
-Uploads a random object to a scratch bucket, stops ONLY the storage container,
-tars its data volume, restarts it, then restores the tar into a brand-new
-throwaway volume, boots a second SeaweedFS on 127.0.0.1:18333 from that copy and
-SHA-256-verifies the object. Reports backup/restore timings (rough RPO/RTO inputs).
-The live volume is only read; throwaway volume/container/bucket are always removed.
+Requires a running Compose stack and Docker access, but no host Python packages or
+.env/credential reads. S3 operations run inside the existing backend. All copies,
+helper containers and archives are removed in finally, including injected failures.
 """
-import hashlib
-import os
+import argparse
+import json
 import secrets
 import subprocess
 import tempfile
 import time
 from pathlib import Path
 
-import boto3
-from botocore.config import Config
-
-root = Path(__file__).resolve().parents[1]
-for line in (root / '.env').read_text().splitlines():
-    if '=' in line and not line.startswith('#'):
-        key, value = line.split('=', 1)
-        os.environ.setdefault(key, value)
+ROOT = Path(__file__).resolve().parents[1]
+STEPS = ('storage-stopped', 'storage-backup', 'storage-restored',
+         'audit-stopped', 'audit-backup', 'audit-restored')
 
 
-def sh(*args, **kw):
-    return subprocess.run(args, cwd=root, check=True, text=True, capture_output=True, **kw).stdout.strip()
+def sh(*args):
+    result = subprocess.run(args, cwd=ROOT, text=True, capture_output=True)
+    if result.returncode:
+        # Docker errors may contain container environment values. Do not echo them.
+        raise RuntimeError(f'{args[0]} {args[1]} failed (exit {result.returncode})')
+    return result.stdout.strip()
 
 
-def client(endpoint):
-    return boto3.client('s3', endpoint_url=endpoint, aws_access_key_id=os.environ['S3_ACCESS_KEY'],
-        aws_secret_access_key=os.environ['S3_SECRET_KEY'], region_name='us-east-1',
-        config=Config(signature_version='s3v4', s3={'addressing_style': 'path'},
-                      retries={'max_attempts': 2, 'mode': 'standard'}))
+def mounted_volume(cid, destination):
+    volume = sh('docker', 'inspect', '-f',
+                '{{range .Mounts}}{{if eq .Destination "' + destination + '"}}{{.Name}}{{end}}{{end}}', cid)
+    if not volume:
+        raise RuntimeError(f'No named volume mounted at {destination}')
+    return volume
 
 
-cid = sh('docker', 'compose', 'ps', '-q', 'storage')
-assert cid, 'storage container not running; run docker compose up -d first'
-image = sh('docker', 'inspect', '-f', '{{.Config.Image}}', cid)
-volume = sh('docker', 'inspect', '-f', '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Name}}{{end}}{{end}}', cid)
-suffix = secrets.token_hex(4)
-tmp_volume, tmp_container = f'storzo-restore-{suffix}', f'storzo-restore-{suffix}'
-backup_dir = tempfile.mkdtemp(prefix='storzo-backup-')
-archive = 'data.tar'
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--fail-after', choices=STEPS, help='Inject failure to exercise finally cleanup')
+    args = parser.parse_args(argv)
+    storage = sh('docker', 'compose', 'ps', '-q', 'storage')
+    backend = sh('docker', 'compose', 'ps', '-q', 'backend')
+    if not storage or not backend:
+        raise RuntimeError('storage and backend must be running; run docker compose up -d first')
+    storage_image = sh('docker', 'inspect', '-f', '{{.Image}}', storage)
+    backend_image = sh('docker', 'inspect', '-f', '{{.Image}}', backend)
+    storage_volume = mounted_volume(storage, '/data')
+    audit_volume = mounted_volume(backend, '/app/state')
+    suffix = secrets.token_hex(6)
+    name = f'storzo-restore-{suffix}'
+    volumes = [name + '-storage', name + '-audit']
+    containers = [name + '-' + role for role in ('storage', 'archive', 'sqlite', 'verify')]
+    backup_dir = Path(tempfile.mkdtemp(prefix=name + '-'))
+    bucket, key = name, 'test/restore.bin'
+    created = False
+    cleanup_errors = []
 
-live = client(os.getenv('SMOKE_S3_ENDPOINT', 'http://localhost:8333'))
-bucket = 'storzo-restore-' + suffix
-obj_key = 'test/restore.bin'
-data = secrets.token_bytes(256 * 1024)
-expected = hashlib.sha256(data).hexdigest()
-created = False
-try:
-    live.create_bucket(Bucket=bucket)
-    created = True
-    live.put_object(Bucket=bucket, Key=obj_key, Body=data)
-    print('TEST: uploaded 256 KiB random object, SHA256:', expected)
+    def checkpoint(step):
+        print(f'STEP: {step}', flush=True)
+        if args.fail_after == step:
+            raise RuntimeError(f'Injected failure after {step}')
 
-    # Stop storage so the tar is a consistent copy (cold backup).
-    t0 = time.time()
-    sh('docker', 'compose', 'stop', 'storage')
+    def live(code):
+        return sh('docker', 'exec', backend, 'python', '-c',
+                  'from app.main import s3_client, audit, DB_PATH\n'
+                  'import hashlib, secrets, sqlite3, json\n'
+                  f'bucket={bucket!r}; key={key!r}\n' + code)
+
+    def archive(source, filename, restore=False):
+        sh('docker', 'run', '--rm', '--name', containers[1],
+           '-v', f'{source}:/data' + ('' if restore else ':ro'),
+           '-v', f'{backup_dir}:/backup' + (':ro' if restore else ''),
+           'alpine', 'tar', 'xf' if restore else 'cf', f'/backup/{filename}', '-C', '/data', '.')
+
     try:
-        sh('docker', 'run', '--rm', '-v', f'{volume}:/data:ro', '-v', f'{backup_dir}:/backup',
-           'alpine', 'tar', 'cf', f'/backup/{archive}', '-C', '/data', '.')
-    finally:
-        sh('docker', 'compose', 'start', 'storage')
-    print(f'TEST: cold backup of volume {volume} took {time.time() - t0:.1f}s')
+        live('s3_client().create_bucket(Bucket=bucket)')
+        created = True
+        expected = live("data=secrets.token_bytes(256*1024)\n"
+                        "s3_client().put_object(Bucket=bucket, Key=key, Body=data)\n"
+                        "print(hashlib.sha256(data).hexdigest())")
+        print('TEST: uploaded 256 KiB random object; SHA-256:', expected, flush=True)
+        t0 = time.monotonic()
+        # Include stop itself in try: a partially successful stop still needs start.
+        try:
+            sh('docker', 'stop', storage)
+            checkpoint('storage-stopped')
+            archive(storage_volume, 'storage.tar')
+            checkpoint('storage-backup')
+        finally:
+            sh('docker', 'start', storage)
+        print(f'TEST: cold storage backup took {time.monotonic() - t0:.1f}s', flush=True)
+        restore_started = time.monotonic()
+        sh('docker', 'volume', 'create', volumes[0])
+        archive(volumes[0], 'storage.tar', restore=True)
+        # Fresh credentials apply only to this loopback-bound throwaway copy.
+        sh('docker', 'run', '-d', '--name', containers[0], '-v', f'{volumes[0]}:/data',
+           '-p', '127.0.0.1:18333:8333', '-e', 'AWS_ACCESS_KEY_ID=restore-drill',
+           '-e', 'AWS_SECRET_ACCESS_KEY=restore-drill-copy-only',
+           '-e', 'WEED_ADMIN_PASSWORD=restore-drill-copy-only', storage_image)
+        checkpoint('storage-restored')
+        verify = (
+            'import boto3, hashlib, time\n'
+            'from botocore.config import Config\n'
+            "s=boto3.client('s3', endpoint_url='http://127.0.0.1:18333', "
+            "aws_access_key_id='restore-drill', aws_secret_access_key='restore-drill-copy-only', "
+            "config=Config(connect_timeout=2, read_timeout=2, retries={'max_attempts': 0}))\n"
+            'for attempt in range(30):\n'
+            ' try:\n'
+            f'  data=s.get_object(Bucket={bucket!r},Key={key!r})["Body"].read()\n'
+            '  break\n'
+            ' except Exception:\n'
+            '  if attempt == 29: raise RuntimeError("Restored S3 unavailable") from None\n'
+            '  time.sleep(3)\n'
+            f'assert hashlib.sha256(data).hexdigest() == {expected!r}, "SHA-256 mismatch"\n'
+            'print("PASS: restored storage SHA-256 matches")'
+        )
+        print(sh('docker', 'run', '--rm', '--name', containers[3], '--network', 'host',
+                 backend_image, 'python', '-c', verify), flush=True)
 
-    t1 = time.time()
-    sh('docker', 'volume', 'create', tmp_volume)
-    sh('docker', 'run', '--rm', '-v', f'{tmp_volume}:/data', '-v', f'{backup_dir}:/backup:ro',
-       'alpine', 'tar', 'xf', f'/backup/{archive}', '-C', '/data')
-    sh('docker', 'run', '-d', '--name', tmp_container, '-v', f'{tmp_volume}:/data',
-       '-p', '127.0.0.1:18333:8333',
-       '-e', f'AWS_ACCESS_KEY_ID={os.environ["S3_ACCESS_KEY"]}',
-       '-e', f'AWS_SECRET_ACCESS_KEY={os.environ["S3_SECRET_KEY"]}',
-       '-e', f'WEED_ADMIN_PASSWORD={os.environ["WEED_ADMIN_PASSWORD"]}', image)
-    restored = client('http://127.0.0.1:18333')
-    for attempt in range(30):
+        print(f'TEST: storage restore + verification took {time.monotonic() - restore_started:.1f}s', flush=True)
+
+        # Record a unique row through the app's SQLite writer. Cold-copy the entire
+        # volume (including WAL/SHM), with the backend stopped to exclude writers.
+        row = live("audit('restore_probe', bucket, key, 'backup/restore verification')\n"
+                   "with sqlite3.connect(DB_PATH) as db:\n"
+                   " print(json.dumps(db.execute('SELECT * FROM audit WHERE action=? AND bucket=?', "
+                   "('restore_probe', bucket)).fetchone()))")
+        t1 = time.monotonic()
         try:
-            got = restored.get_object(Bucket=bucket, Key=obj_key)['Body'].read()
-            break
-        except Exception as exc:
-            if attempt == 29:
-                raise RuntimeError('Restored copy did not serve the object within ~90 s') from exc
-            time.sleep(3)
-    actual = hashlib.sha256(got).hexdigest()
-    assert actual == expected, f'RESTORE INTEGRITY FAILED: expected={expected}, actual={actual}'
-    print(f'PASS: restored copy served exact bytes (SHA-256 match); restore took {time.time() - t1:.1f}s')
-finally:
-    subprocess.run(['docker', 'rm', '-f', tmp_container], capture_output=True)
-    subprocess.run(['docker', 'volume', 'rm', '-f', tmp_volume], capture_output=True)
-    subprocess.run(['docker', 'run', '--rm', '-v', f'{backup_dir}:/backup', 'alpine', 'rm', '-rf', f'/backup/{archive}'],
-                   capture_output=True)
-    Path(backup_dir).rmdir() if not any(Path(backup_dir).iterdir()) else None
-    if created:
+            sh('docker', 'stop', backend)
+            checkpoint('audit-stopped')
+            archive(audit_volume, 'audit.tar')
+            checkpoint('audit-backup')
+        finally:
+            sh('docker', 'start', backend)
+        sh('docker', 'volume', 'create', volumes[1])
+        archive(volumes[1], 'audit.tar', restore=True)
+        checkpoint('audit-restored')
+        verify_db = (
+            'import sqlite3, json\n'
+            'with sqlite3.connect("file:/restore/audit.db?mode=ro", uri=True) as db:\n'
+            ' assert db.execute("PRAGMA integrity_check").fetchone() == ("ok",)\n'
+            ' actual=db.execute("SELECT * FROM audit WHERE action=? AND bucket=?", '
+            f'("restore_probe", {bucket!r})).fetchone()\n'
+            f' assert list(actual or ()) == {json.loads(row)!r}, "Audit row mismatch"\n'
+            'print("PASS: restored SQLite integrity_check and exact audit row match")'
+        )
+        print(sh('docker', 'run', '--rm', '--name', containers[2],
+                 '-v', f'{volumes[1]}:/restore', backend_image, 'python', '-c', verify_db), flush=True)
+        print(f'TEST: audit backup + restore + verification took {time.monotonic() - t1:.1f}s', flush=True)
+    finally:
+        # Only remove resources with this run's unpredictable names. Verify removal
+        # instead of swallowing cleanup errors and reporting a false success.
+        for container in containers:
+            subprocess.run(['docker', 'rm', '-f', container], capture_output=True)
+        for volume in volumes:
+            subprocess.run(['docker', 'volume', 'rm', volume], capture_output=True)
         try:
-            live.delete_object(Bucket=bucket, Key=obj_key)
-            live.delete_bucket(Bucket=bucket)
-            print('Scratch data cleaned up')
-        except Exception as exc:
-            print('WARNING: scratch bucket cleanup failed:', exc)
+            # Archives were created by root in Docker; remove only these two files.
+            sh('docker', 'run', '--rm', '--name', containers[1], '-v', f'{backup_dir}:/backup',
+               'alpine', 'rm', '-f', '/backup/storage.tar', '/backup/audit.tar')
+            backup_dir.rmdir()
+        except Exception:
+            cleanup_errors.append('temporary archives/directory')
+        if created:
+            for attempt in range(30):
+                try:
+                    live('s3_client().delete_object(Bucket=bucket, Key=key)\n'
+                         's3_client().delete_bucket(Bucket=bucket)')
+                    print('PASS: live scratch bucket cleaned up', flush=True)
+                    break
+                except Exception:
+                    if attempt == 29:
+                        cleanup_errors.append('live scratch bucket')
+                    else:
+                        time.sleep(3)
+        remaining_containers = set(sh('docker', 'ps', '-a', '--format', '{{.Names}}').splitlines())
+        remaining_volumes = set(sh('docker', 'volume', 'ls', '--format', '{{.Name}}').splitlines())
+        cleanup_errors.extend(sorted(remaining_containers.intersection(containers)))
+        cleanup_errors.extend(sorted(remaining_volumes.intersection(volumes)))
+        if cleanup_errors:
+            raise RuntimeError('Cleanup failed: ' + ', '.join(cleanup_errors))
+        print(f'PASS: cleanup verified for {name} (containers, volumes, temporary directory)', flush=True)
+
+
+if __name__ == '__main__':
+    main()
