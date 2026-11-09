@@ -36,6 +36,9 @@ test('console login, upload PNG, thumbnail, download, delete', async ({ page }) 
   await page.getByRole('button', { name: 'Sign in to console' }).click();
   await expect(page.getByRole('button', { name: 'Buckets & objects' })).toBeVisible();
 
+  // "New bucket" lives on the Buckets page, not the dashboard.
+  await page.getByRole('button', { name: 'Buckets & objects' }).click();
+
   // Create a bucket (the UI uses window.prompt for the name).
   page.once('dialog', d => void d.accept(bucket));
   await page.getByRole('button', { name: 'New bucket' }).click();
