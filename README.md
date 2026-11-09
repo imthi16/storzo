@@ -159,3 +159,7 @@ SeaweedFS is an independent upstream project; see its upstream repository for it
 ## Safe migration posture
 
 Keep the existing MinIO installation untouched. Test with synthetic images first. Even after this demo works, obtain a staging compatibility matrix, full backups, restore drill, bucket permissions review, cutover/rollback plan, and TL approval before production migration.
+
+## Contributing
+
+Use separate feature branches for Claude Code (backend), Meta Muse Code (frontend) and Codex (independent testing/review); merge to `main` only when tests pass. Do not commit secrets, `.env`, office data, or customer files.

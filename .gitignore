@@ -1,16 +1,36 @@
+# Credentials and local configuration
 .env
 .env.*
 !.env.example
+*.pem
+*.key
+*.p12
+secrets/
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+# Node
 node_modules/
 dist/
-__pycache__/
-.pytest_cache/
-*.py[cod]
+build/
+coverage/
+# Local data
+data/
+storage-data/
+*.sqlite
+*.sqlite3
 *.db
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/
+# Charts generated outputs
+*.tgz
 *.db-shm
 *.db-wal
-.venv/
 *.egg-info/
-.DS_Store
 secrets.yaml
 values-private.yaml
