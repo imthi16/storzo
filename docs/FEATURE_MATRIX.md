@@ -33,4 +33,5 @@ Status meanings: **Implemented** = source code exists, subject to end-to-end val
 | Ops | Real S3 integrity smoke script | Implemented as script | Run only against live stack |
 | Ops | Verified restart persistence | Manual validation required | Do not mark complete based on PVC configuration alone |
 | Ops | TLS / enterprise auth / MFA | Planned | Must be implemented before internet exposure |
-| Ops | Disaster recovery and backup restore | Planned | Must prove before cutover |
+| Ops | Single-node cold backup/restore drill | Implemented as script | `scripts/restore_integrity.py` tars the volume on the same host and restores to a throwaway copy; passed once on a dev machine. Not off-host, not incremental |
+| Ops | Disaster recovery (off-host backup, RPO/RTO targets) | Planned | Must prove before cutover |

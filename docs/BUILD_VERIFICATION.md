@@ -15,6 +15,7 @@ This record distinguishes checks **run by the authoring environment** from check
 | Native SeaweedFS S3 integration test | **NOT VERIFIED** | Requires Docker stack and actual object reads/writes |
 | Restart data durability test | **NOT VERIFIED** | Run `scripts/restart_integrity.py` in local Docker environment |
 | Helm lint/template/install | **NOT VERIFIED** | `helm`/`kubectl` not available in authoring environment |
-| HA / backup / disaster recovery | **NOT IMPLEMENTED/VERIFIED** | Not covered by one-node demo |
+| Cold backup → restore to fresh volume | **Script added** | Run `scripts/restore_integrity.py`; same-host only, checksum-verified, covers objects in the SeaweedFS volume (not the audit SQLite volume) |
+| HA / off-host backup / disaster recovery | **NOT IMPLEMENTED/VERIFIED** | Not covered by one-node demo |
 
 Do not describe this project to your TL as fully production-ready. The practical goal is an isolated proof-of-concept before evaluating a migration.

@@ -33,5 +33,8 @@ python3 scripts/smoke_test.py
 echo '=== Actual storage restart and checksum verification ==='
 python3 scripts/restart_integrity.py
 
+echo '=== Cold backup and restore-to-fresh-volume verification ==='
+python3 scripts/restore_integrity.py
+
 echo '=== All demo checks passed ==='
 echo 'Open http://localhost:8088 and sign in with the admin password from .env'
