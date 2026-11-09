@@ -1,0 +1,72 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "storzo.fullname" . }}-backend
+spec:
+  replicas: {{ .Values.backend.replicas }}
+  strategy:
+    type: Recreate # Avoid two writers on the RWO SQLite audit volume.
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: backend
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: backend
+    spec:
+      automountServiceAccountToken: false
+      securityContext: {runAsNonRoot: true, runAsUser: 10001, fsGroup: 10001}
+      containers:
+        - name: api
+          image: {{ .Values.backend.image | quote }}
+          imagePullPolicy: {{ .Values.backend.imagePullPolicy }}
+          ports: [{name: http, containerPort: 8000}]
+          env:
+            - {name: S3_ENDPOINT, value: {{ .Values.backend.s3Endpoint | quote }} }
+            - {name: S3_PUBLIC_ENDPOINT, value: {{ .Values.backend.s3PublicEndpoint | quote }} }
+            - {name: ADMIN_USER, value: "admin"}
+            - {name: COOKIE_SECURE, value: {{ .Values.backend.cookieSecure | quote }} }
+            - {name: MAX_UPLOAD_MB, value: {{ .Values.backend.maxUploadMB | quote }} }
+            - {name: AUDIT_DB_PATH, value: /app/state/audit.db}
+            - name: ADMIN_PASSWORD
+              valueFrom: {secretKeyRef: {name: {{ .Values.backend.secretName }}, key: ADMIN_PASSWORD}}
+            - name: SESSION_SECRET
+              valueFrom: {secretKeyRef: {name: {{ .Values.backend.secretName }}, key: SESSION_SECRET}}
+            - name: S3_ACCESS_KEY
+              valueFrom: {secretKeyRef: {name: {{ .Values.backend.secretName }}, key: S3_ACCESS_KEY}}
+            - name: S3_SECRET_KEY
+              valueFrom: {secretKeyRef: {name: {{ .Values.backend.secretName }}, key: S3_SECRET_KEY}}
+          volumeMounts:
+            - {name: audit, mountPath: /app/state}
+          readinessProbe:
+            httpGet: {path: /api/health/ready, port: http}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: {path: /api/health/live, port: http}
+            initialDelaySeconds: 15
+            periodSeconds: 15
+          resources:
+{{ toYaml .Values.resources.backend | indent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+            seccompProfile: {type: RuntimeDefault}
+      volumes:
+        - name: audit
+          persistentVolumeClaim:
+            claimName: {{ include "storzo.fullname" . }}-audit
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "storzo.fullname" . }}-backend
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: backend
+  ports:
+    - {port: 8000, targetPort: http, name: http}

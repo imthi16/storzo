@@ -1,0 +1,32 @@
+nameOverride: ""
+fullnameOverride: ""
+backend:
+  image: storzo-backend:0.1.0
+  imagePullPolicy: IfNotPresent
+  replicas: 1 # SQLite audit storage uses a single writer in this MVP.
+  maxUploadMB: "50"
+  cookieSecure: "false" # MUST be true for TLS/HTTPS deployment.
+  s3Endpoint: "http://seaweedfs-s3:8333"
+  s3PublicEndpoint: "http://localhost:8333" # Configure externally reachable S3 endpoint for signed links.
+  secretName: storzo-credentials
+  auditStorage:
+    size: 1Gi
+    storageClassName: "" # Default Kubernetes StorageClass when empty.
+frontend:
+  image: storzo-frontend:0.1.0
+  imagePullPolicy: IfNotPresent
+  replicas: 1
+service:
+  frontendPort: 80
+ingress:
+  enabled: false
+  className: nginx
+  hostname: storzo.example.internal
+  tlsSecretName: ""
+resources:
+  backend:
+    requests: {cpu: 100m, memory: 256Mi}
+    limits: {cpu: "1", memory: 1Gi}
+  frontend:
+    requests: {cpu: 25m, memory: 64Mi}
+    limits: {cpu: 250m, memory: 128Mi}

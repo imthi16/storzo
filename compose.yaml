@@ -1,0 +1,65 @@
+name: storzo
+services:
+  storage:
+    # Official SeaweedFS container quick start runs `weed mini`.
+    image: chrislusf/seaweedfs:${SEAWEEDFS_TAG:-4.53_full}
+    restart: unless-stopped
+    environment:
+      AWS_ACCESS_KEY_ID: ${S3_ACCESS_KEY:?Run python3 scripts/setup_env.py}
+      AWS_SECRET_ACCESS_KEY: ${S3_SECRET_KEY:?Missing secret}
+      S3_BUCKET: demo-images
+      WEED_ADMIN_PASSWORD: ${WEED_ADMIN_PASSWORD:?Missing secret}
+    volumes:
+      - storage-data:/data
+    ports:
+      # Loopback only by default: S3 API is not internet-exposed.
+      - "${S3_BIND_IP:-127.0.0.1}:8333:8333"
+    networks: [internal]
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    depends_on:
+      storage:
+        condition: service_started
+    environment:
+      S3_ENDPOINT: http://storage:8333
+      S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-http://localhost:8333}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY}
+      ADMIN_USER: ${ADMIN_USER:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+      SESSION_SECRET: ${SESSION_SECRET}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-50}
+      AUDIT_DB_PATH: /app/state/audit.db
+    volumes:
+      - audit-data:/app/state
+    expose: ['8000']
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health/live', timeout=2)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks: [internal]
+
+  frontend:
+    build: ./frontend
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    environment:
+      BACKEND_UPSTREAM: backend:8000
+    ports:
+      - "${UI_BIND_IP:-127.0.0.1}:8088:8080"
+    networks: [internal]
+
+volumes:
+  storage-data:
+  audit-data:
+
+networks:
+  internal:
+    driver: bridge

@@ -1,0 +1,33 @@
+# DEMO ONLY. Render unique credentials into a TEMPORARY copy using scripts/k8s_demo_install.sh.
+# These demo settings are SINGLE-NODE; no replication, no HA, no automatic offsite backup.
+global:
+  seaweedfs:
+    enableReplication: false
+    replicationPlacement: "000"
+master:
+  replicas: 1
+  data:
+    type: persistentVolumeClaim
+    size: 1Gi
+volume:
+  replicas: 1
+  dataDirs:
+    - name: data
+      type: persistentVolumeClaim
+      size: 20Gi
+      maxVolumes: 0
+filer:
+  replicas: 1
+  data:
+    type: persistentVolumeClaim
+    size: 2Gi
+s3:
+  enabled: true
+  replicas: 1
+  enableAuth: true
+  credentials:
+    admin:
+      accessKey: "__ACCESS_KEY__"
+      secretKey: "__SECRET_KEY__"
+  createBuckets:
+    - name: demo-images

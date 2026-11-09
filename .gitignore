@@ -29,3 +29,8 @@ storage-data/
 .vscode/
 # Charts generated outputs
 *.tgz
+*.db-shm
+*.db-wal
+*.egg-info/
+secrets.yaml
+values-private.yaml
