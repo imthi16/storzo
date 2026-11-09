@@ -132,3 +132,45 @@ def test_bad_keys_and_health(monkeypatch, tmp_path):
                 files={'file':('a.png', b'data', 'image/png')}, headers={'X-CSRF-Token':csrf}).status_code == 400
         assert c.get('/api/objects/download?bucket=demo-images&key=..%2Fa').status_code == 400
     finally: c.__exit__(None, None, None)
+
+
+def test_unicode_credentials(monkeypatch, tmp_path):
+    monkeypatch.setattr(main, 'ADMIN_USER', 'நிர்வாகி')
+    monkeypatch.setattr(main, 'ADMIN_PASSWORD', 'பாதுகாப்பான-password-12345')
+    c, _ = setup_client(monkeypatch, tmp_path)
+    try:
+        for username, password in [
+            ('wrong', main.ADMIN_PASSWORD),
+            (main.ADMIN_USER, 'தவறு'),
+        ]:
+            assert c.post('/api/auth/login', json={
+                'username': username, 'password': password,
+            }).status_code == 401
+        response = c.post('/api/auth/login', json={
+            'username': main.ADMIN_USER, 'password': main.ADMIN_PASSWORD,
+        })
+        assert response.status_code == 200
+        assert c.get('/api/auth/me').json()['username'] == main.ADMIN_USER
+    finally:
+        c.__exit__(None, None, None)
+
+
+def test_unicode_download_filename(monkeypatch, tmp_path):
+    from urllib.parse import quote
+    c, fake = setup_client(monkeypatch, tmp_path)
+    try:
+        login(c)
+        name = 'படம் café "one".png'
+        key = 'photos/' + name
+        fake.buckets['demo-images'][key] = (b'image', 'image/png')
+        for route, disposition in [('download', 'attachment'), ('preview', 'inline')]:
+            response = c.get('/api/objects/' + route, params={
+                'bucket': 'demo-images', 'key': key,
+            })
+            assert response.status_code == 200
+            assert response.content == b'image'
+            header = response.headers['content-disposition']
+            assert header.startswith(disposition + '; filename="')
+            assert header.endswith("filename*=UTF-8''" + quote(name, safe=''))
+    finally:
+        c.__exit__(None, None, None)

@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { Activity, ArrowDownToLine, ArrowLeft, CheckCircle2, ChevronRight, CloudOff, Copy, Database, File as FileIcon, FileImage, Folder, HardDrive, Image, LayoutDashboard, Link, LockKeyhole, LogOut, Menu, Plus, RefreshCw, Search, Server, Settings, ShieldCheck, Trash2, UploadCloud, X } from 'lucide-react';
 import './style.css';
@@ -41,7 +41,17 @@ function App() {
   const [buckets, setBuckets] = useState<Bucket[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [prefix, setPrefix] = useState('');
-  const [list, setList] = useState<Listing>({items: [], folders: [], continuation: null, prefix: ''});
+  const [listing, setListing] = useState<{bucket: string; data: Listing} | null>(null);
+  const list = listing?.bucket === selected && listing.data.prefix === prefix
+    ? listing.data : {items: [], folders: [], continuation: null, prefix};
+  const listingRequest = useRef(0);
+  const objectLocation = useRef({bucket: selected, prefix});
+  useLayoutEffect(() => {
+    objectLocation.current = {bucket: selected, prefix};
+    listingRequest.current++;
+    setListing(null);
+    setPreview(null);
+  }, [selected, prefix, session]);
   const [stats, setStats] = useState<Stats | null>(null);
   const [audit, setAudit] = useState<Audit[]>([]);
   const [ready, setReady] = useState<'checking'|'online'|'offline'>('checking');
@@ -57,10 +67,17 @@ function App() {
   const reloadStats = async () => { const d = await call<Stats>('/dashboard'); setStats(d); };
   const reloadAudit = async () => { const d = await call<{items: Audit[]}>('/audit'); setAudit(d.items); };
   const reloadObjects = async (bucket = selected, path = prefix, token = '') => {
-    if (!bucket) return;
+    if (!bucket || bucket !== objectLocation.current.bucket || path !== objectLocation.current.prefix) return;
+    const request = ++listingRequest.current;
     const p = `/buckets/${enc(bucket)}/objects?prefix=${enc(path)}&limit=100${token ? `&continuation=${enc(token)}` : ''}`;
-    const data = await call<Listing>(p);
-    setList(old => token ? {...data, items: [...old.items, ...data.items], folders: [...old.folders, ...data.folders]} : data);
+    try {
+      const data = await call<Listing>(p);
+      if (request !== listingRequest.current) return;
+      setListing(old => ({bucket, data: token && old?.bucket === bucket && old.data.prefix === path
+        ? {...data, items: [...old.data.items, ...data.items], folders: [...old.data.folders, ...data.folders]} : data}));
+    } catch (error) {
+      if (request === listingRequest.current) throw error;
+    }
   };
   const refresh = async () => {
     setBusy(true);

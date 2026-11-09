@@ -170,8 +170,8 @@ def ready():
 
 @app.post('/api/auth/login')
 def login(body: Login, response: Response):
-    if not (hmac.compare_digest(body.username, ADMIN_USER) and
-            hmac.compare_digest(body.password, ADMIN_PASSWORD)):
+    if not (hmac.compare_digest(body.username.encode("utf-8"), ADMIN_USER.encode("utf-8")) and
+            hmac.compare_digest(body.password.encode("utf-8"), ADMIN_PASSWORD.encode("utf-8"))):
         # Fixed-delay protection is better enforced by a gateway rate limit.
         raise HTTPException(401, 'Invalid credentials')
     csrf = secrets.token_urlsafe(24)
@@ -271,7 +271,10 @@ def stream_object(bucket: str, key: str, preview: bool):
     name = key.rsplit('/', 1)[-1].replace('\r', '').replace('\n', '')
     ascii_name = ''.join(c if c.isascii() and c not in '"\\' and ord(c) >= 32 else '_' for c in name)
     # The ASCII fallback prevents response header encoding failures for Unicode file names.
-    disposition = f'{"inline" if preview else "attachment"}; filename="{ascii_name}"; filename*=UTF-8''{quote(name)}'
+    disposition = (
+        f'{"inline" if preview else "attachment"}; filename="{ascii_name}"; '
+        f"filename*=UTF-8''{quote(name, safe='')}"
+    )
     headers = {'X-Content-Type-Options': 'nosniff',
                'Content-Disposition': disposition,
                'Cache-Control': 'private, max-age=60' if preview else 'no-store'}
