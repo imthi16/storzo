@@ -1,0 +1,6 @@
+apiVersion: v2
+name: storzo
+version: 0.1.0
+appVersion: "0.1.0"
+description: Storzo image-management plane over an existing SeaweedFS S3 endpoint
+home: https://github.com/seaweedfs/seaweedfs

@@ -1,0 +1,16 @@
+.env
+.env.*
+!.env.example
+node_modules/
+dist/
+__pycache__/
+.pytest_cache/
+*.py[cod]
+*.db
+*.db-shm
+*.db-wal
+.venv/
+*.egg-info/
+.DS_Store
+secrets.yaml
+values-private.yaml
