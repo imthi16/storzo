@@ -14,19 +14,58 @@ const enc = encodeURIComponent;
 const bytes = (n: number) => n < 1024 ? `${n} B` : n < 1024 ** 2 ? `${(n/1024).toFixed(1)} KB` : n < 1024 ** 3 ? `${(n/1024**2).toFixed(1)} MB` : `${(n/1024**3).toFixed(2)} GB`;
 const isImage = (k: string) => /\.(jpg|jpeg|png|webp|gif|avif)$/i.test(k);
 const shortName = (k: string) => k.split('/').filter(Boolean).pop() || k;
+const folderOf = (k: string) => k.includes('/') ? k.slice(0, k.lastIndexOf('/') + 1) : '';
 const when = (s: string) => s ? new Date(s).toLocaleString() : '—';
 
 async function call<T>(path: string, csrf?: string, options: RequestInit = {}): Promise<T> {
   const method = (options.method || 'GET').toUpperCase();
   const headers = new Headers(options.headers);
   if (csrf && !['GET', 'HEAD', 'OPTIONS'].includes(method)) headers.set('X-CSRF-Token', csrf);
-  const res = await fetch('/api' + path, {...options, credentials: 'same-origin', headers});
+  let res: Response;
+  try {
+    res = await fetch('/api' + path, {...options, credentials: 'same-origin', headers});
+  } catch {
+    throw new Error('Network error — could not reach the server. Check your connection and retry.');
+  }
   if (!res.ok) {
     let error = `Request failed (${res.status})`;
-    try { const detail = await res.json(); if (detail.detail) error = detail.detail; } catch { /* ignore */ }
+    try { const detail = await res.json(); if (detail.detail) error = `Request failed (${res.status}): ${detail.detail}`; } catch { /* ignore */ }
     throw new Error(error);
   }
   return res.json() as Promise<T>;
+}
+
+type UploadItem = {id: number; name: string; size: number; status: 'queued' | 'uploading' | 'done' | 'error'; progress: number; error: string; file: File; bucket: string; key: string};
+
+/** Map a raw upload/call error to a message that says what happened and what to do. */
+function friendly(message: string, name: string): string {
+  if (/\(413\)|exceeds|too large/i.test(message)) return `"${name}" was rejected: file too large for the server limit. Try a smaller file.`;
+  if (/\(401\)|expired|login required|invalid session/i.test(message)) return 'Session expired — please sign in again.';
+  if (/network error|failed to fetch|load failed/i.test(message)) return `Could not upload "${name}": network error. Check your connection and retry.`;
+  if (/\(415\)|not allowed|executable/i.test(message)) return `"${name}" was rejected: ${message.replace(/^.*?:\s*/, '')}`;
+  return `Could not upload "${name}": ${message.replace(/^.*?:\s*/, '')}`;
+}
+
+/** Upload one file with progress events (fetch cannot report upload progress). */
+function postUpload(bucket: string, key: string, file: File, csrf: string, onProgress: (pct: number) => void): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/objects/upload');
+    xhr.withCredentials = true;
+    xhr.setRequestHeader('X-CSRF-Token', csrf);
+    xhr.upload.onprogress = e => { if (e.lengthComputable) onProgress(Math.round(e.loaded / e.total * 100)); };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) { onProgress(100); resolve(); return; }
+      let detail = `Request failed (${xhr.status})`;
+      try { const body = JSON.parse(xhr.responseText); if (body.detail) detail += `: ${body.detail}`; } catch { /* ignore */ }
+      reject(new Error(detail));
+    };
+    xhr.onerror = () => reject(new Error('Network error — could not reach the server.'));
+    xhr.ontimeout = () => reject(new Error('Network error — upload timed out.'));
+    const data = new FormData();
+    data.append('bucket', bucket); data.append('key', key); data.append('file', file);
+    xhr.send(data);
+  });
 }
 
 function App() {
@@ -59,10 +98,28 @@ function App() {
   const [search, setSearch] = useState('');
   const [preview, setPreview] = useState<Obj | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
+  const [uploads, setUploads] = useState<UploadItem[]>([]);
+  const uploadSeq = useRef(0);
 
   const csrf = session?.csrf;
   const show = (m: string) => { setNotice(m); window.setTimeout(() => setNotice(''), 6000); };
-  const fail = (e: unknown) => show(e instanceof Error ? e.message : 'Unexpected error');
+  const fail = (e: unknown) => {
+    const message = e instanceof Error ? e.message : 'Unexpected error';
+    if (/\(401\)|expired|login required|invalid session/i.test(message)) {
+      setSession(null);
+      show('Session expired — please sign in again.');
+      return;
+    }
+    show(message);
+  };
+
+  // Preview modal closes on Escape.
+  useEffect(() => {
+    if (!preview) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setPreview(null); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [preview]);
   const reloadBuckets = async () => { const d = await call<{items: Bucket[]}>('/buckets'); setBuckets(d.items); };
   const reloadStats = async () => { const d = await call<Stats>('/dashboard'); setStats(d); };
   const reloadAudit = async () => { const d = await call<{items: Audit[]}>('/audit'); setAudit(d.items); };
@@ -110,18 +167,61 @@ function App() {
     if (!selected || !window.confirm(`Delete empty bucket "${selected}"? This cannot be undone.`)) return;
     try { await call(`/buckets/${enc(selected)}`, csrf, {method:'DELETE'}); setSelected(null); setPrefix(''); await reloadBuckets(); show('Bucket removed'); } catch(e) { fail(e); }
   };
+  // runUpload uses only the bucket/key stored on the item when it was queued,
+  // never the live selected/prefix state, so a retry after navigating elsewhere
+  // still uploads to the original location. Returns true on success.
+  const runUpload = async (item: UploadItem): Promise<boolean> => {
+    if (!csrf) return false;
+    setUploads(old => old.map(u => u.id === item.id ? {...u, status: 'uploading', progress: 0, error: ''} : u));
+    try {
+      await postUpload(item.bucket, item.key, item.file, csrf, pct =>
+        setUploads(old => old.map(u => u.id === item.id ? {...u, progress: pct} : u)));
+      setUploads(old => old.map(u => u.id === item.id ? {...u, status: 'done', progress: 100} : u));
+      return true;
+    } catch (e) {
+      const raw = e instanceof Error ? e.message : 'Unexpected error';
+      const message = friendly(raw, item.name);
+      setUploads(old => old.map(u => u.id === item.id ? {...u, status: 'error', error: message} : u));
+      if (/session expired/i.test(message)) { setSession(null); }
+      show(message);
+      return false;
+    }
+  };
+  // Refresh the object listing for a retried item, but only when its bucket is
+  // the one currently on screen; otherwise leave the current view untouched.
+  const refreshAfterRetry = async (item: UploadItem) => {
+    if (item.bucket !== objectLocation.current.bucket) return;
+    try { await reloadObjects(item.bucket, folderOf(item.key)); await reloadStats(); } catch(e) { fail(e); }
+  };
   const upload = async (files: FileList | File[] | null) => {
     if (!selected || !files?.length) return;
-    setBusy(true);
-    let count = 0;
-    for (const file of Array.from(files)) {
-      const data = new FormData(); data.append('bucket', selected); data.append('key', prefix + file.name); data.append('file', file);
-      try { await call('/objects/upload', csrf, {method:'POST', body:data}); count++; } catch(e) { fail(e); }
-    }
+    const bucket = selected, folder = prefix;
+    const batch: UploadItem[] = Array.from(files).map(file =>
+      ({id: ++uploadSeq.current, name: file.name, size: file.size, status: 'queued' as const, progress: 0, error: '', file, bucket, key: folder + file.name}));
+    setUploads(old => [...batch, ...old].slice(0, 20));
     if (fileInput.current) fileInput.current.value = '';
+    setBusy(true);
+    for (const item of batch) await runUpload(item);
+    setBusy(false);
     try { await reloadObjects(); await reloadStats(); } catch(e) { fail(e); }
-    show(`Uploaded ${count}/${files.length} file(s)`); setBusy(false);
   };
+  const retryUpload = async (id: number) => {
+    const item = uploads.find(u => u.id === id);
+    if (!item || item.status !== 'error') return;
+    setBusy(true);
+    const ok = await runUpload(item);
+    setBusy(false);
+    if (ok) await refreshAfterRetry(item);
+  };
+  const retryFailed = async () => {
+    const failed = uploads.filter(u => u.status === 'error');
+    setBusy(true);
+    const succeeded: UploadItem[] = [];
+    for (const item of failed) { if (await runUpload(item)) succeeded.push(item); }
+    setBusy(false);
+    for (const item of succeeded) await refreshAfterRetry(item);
+  };
+  const failedCount = uploads.filter(u => u.status === 'error').length;
   const deleteFile = async (key: string) => {
     if (!selected || !window.confirm(`Permanently delete "${shortName(key)}"?`)) return;
     try { await call(`/objects?bucket=${enc(selected)}&key=${enc(key)}`, csrf, {method:'DELETE'}); await reloadObjects(); show('Object deleted'); } catch(e) { fail(e); }
@@ -136,7 +236,7 @@ function App() {
   const openBucket = (name: string) => { setSelected(name); setPrefix(''); setSearch(''); setPage('buckets'); };
 
   if (booting) return <div className="loading"><Database size={35}/><p>Connecting to Storzo…</p></div>;
-  if (!session) return <div className="login-page"><div className="login-card"><div className="brand-icon large"><Database size={26}/></div><div className="eyebrow">SELF-HOSTED OBJECT STORAGE</div><h1>Welcome to <span>Storzo.</span></h1><p>Your images and objects. Your infrastructure. No cloud storage bill.</p><form onSubmit={login}><label>Username<input value={username} onChange={e=>setUsername(e.target.value)} autoComplete="username" required/></label><label>Password<input value={password} onChange={e=>setPassword(e.target.value)} type="password" autoComplete="current-password" required/></label><button className="primary full" disabled={loginBusy}><LockKeyhole size={17}/>{loginBusy?'Signing in…':'Sign in to console'}</button></form><p className="footnote">This console manages the locally hosted SeaweedFS S3 service.</p></div>{notice && <div className="toast">{notice}</div>}</div>;
+  if (!session) return <div className="login-page"><div className="login-card"><div className="brand-icon large"><Database size={26}/></div><div className="eyebrow">SELF-HOSTED OBJECT STORAGE</div><h1>Welcome to <span>Storzo.</span></h1><p>Your images and objects. Your infrastructure. No cloud storage bill.</p><form onSubmit={login}><label>Username<input value={username} onChange={e=>setUsername(e.target.value)} autoComplete="username" required/></label><label>Password<input value={password} onChange={e=>setPassword(e.target.value)} type="password" autoComplete="current-password" required/></label><button className="primary full" disabled={loginBusy}><LockKeyhole size={17}/>{loginBusy?'Signing in…':'Sign in to console'}</button></form><p className="footnote">This console manages the locally hosted SeaweedFS S3 service.</p></div>{notice && <div className="toast" role="status">{notice}</div>}</div>;
 
   return <div className="shell">
     <aside className={`sidebar ${menuOpen?'expanded':''}`}>
@@ -148,10 +248,10 @@ function App() {
         <button className={page==='activity'?'nav active':'nav'} onClick={()=>nav('activity')}><Activity size={19}/>Activity log</button>
         <button className={page==='settings'?'nav active':'nav'} onClick={()=>nav('settings')}><Settings size={19}/>Settings</button>
       </nav>
-      <div className="side-bottom"><div className="infra-tag"><span className={`pulse ${ready}`}/>{ready==='online'?'Storage connected':ready==='offline'?'Storage unavailable':'Checking storage'}</div><div className="side-user"><div className="avatar">{session.username[0].toUpperCase()}</div><div><strong>{session.username}</strong><small>Administrator</small></div><button onClick={logout} title="Sign out" className="icon-btn"><LogOut size={17}/></button></div></div>
+      <div className="side-bottom"><div className="infra-tag"><span className={`pulse ${ready}`}/>{ready==='online'?'Storage connected':ready==='offline'?'Storage unavailable':'Checking storage'}</div><div className="side-user"><div className="avatar">{session.username[0].toUpperCase()}</div><div><strong>{session.username}</strong><small>Administrator</small></div><button onClick={logout} title="Sign out" aria-label="Sign out" className="icon-btn"><LogOut size={17}/></button></div></div>
     </aside>
     <main className="content">
-      <header className="topbar"><button className="mobile-toggle icon-btn" onClick={()=>setMenuOpen(!menuOpen)}><Menu/></button><div className="breadcrumbs"><span>Workspace</span><ChevronRight size={15}/><strong>{page==='dashboard'?'Overview':page==='buckets'?'Buckets & objects':page==='activity'?'Activity log':'Settings'}</strong></div><div className="top-actions"><div className="local-badge"><CloudOff size={15}/> 100% SELF-HOSTED</div><button className="secondary compact" onClick={refresh} disabled={busy}><RefreshCw size={16} className={busy?'spin':''}/> Refresh</button></div></header>
+      <header className="topbar"><button className="mobile-toggle icon-btn" aria-label="Toggle navigation menu" onClick={()=>setMenuOpen(!menuOpen)}><Menu/></button><div className="breadcrumbs"><span>Workspace</span><ChevronRight size={15}/><strong>{page==='dashboard'?'Overview':page==='buckets'?'Buckets & objects':page==='activity'?'Activity log':'Settings'}</strong></div><div className="top-actions"><div className="local-badge"><CloudOff size={15}/> 100% SELF-HOSTED</div><button className="secondary compact" onClick={refresh} disabled={busy}><RefreshCw size={16} className={busy?'spin':''}/> Refresh</button></div></header>
       <div className="page-body">
       {page==='dashboard' && <>
         <div className="heading"><div><div className="eyebrow">STORAGE OVERVIEW</div><h1>Good to see you, {session.username} <span className="wave">✦</span></h1><p>All your files in one place, running on your infrastructure.</p></div><button className="primary" onClick={()=>nav('buckets')}><Database size={17}/> Browse files</button></div>
@@ -166,13 +266,14 @@ function App() {
       {page==='buckets' && <><div className="heading"><div><div className="eyebrow">OBJECT EXPLORER</div><h1>Buckets & objects</h1><p>Organize, preview and manage your files.</p></div><button className="primary" onClick={createBucket}><Plus size={17}/> New bucket</button></div>
         <div className="explorer"><div className="bucket-panel"><div className="panel-subtitle">YOUR BUCKETS <span>{buckets.length}</span></div>{buckets.map(b=><button key={b.name} className={b.name===selected?'bucket-tab selected':'bucket-tab'} onClick={()=>openBucket(b.name)}><Database size={16}/><span>{b.name}</span><ChevronRight size={15}/></button>)}{buckets.length===0&&<p className="muted small">No buckets. Create one to begin.</p>}</div>
         <section className="objects-panel">{!selected?<div className="empty tall"><Database size={34}/><h2>Select a bucket</h2><p>Choose a bucket on the left or create a new one.</p></div>:<>
-          <div className="object-header"><div className="path"><button onClick={()=>setPrefix('')}>{selected}</button>{prefix.split('/').filter(Boolean).map((part,i,all)=><React.Fragment key={i}><ChevronRight size={14}/><button onClick={()=>setPrefix(all.slice(0,i+1).join('/')+'/')}>{part}</button></React.Fragment>)}</div><div className="actions"><input ref={fileInput} type="file" multiple hidden onChange={e=>upload(e.target.files)}/><button className="secondary compact" onClick={deleteBucket}><Trash2 size={15}/> Delete bucket</button><button className="primary compact" onClick={()=>fileInput.current?.click()} disabled={busy}><UploadCloud size={16}/>{busy?'Working…':'Upload'}</button></div></div>
-          <div className="toolbar"><div className="searchbox"><Search size={17}/><input placeholder="Filter items in this folder..." value={search} onChange={e=>setSearch(e.target.value)}/></div><span className="muted small">{list.items.length} objects · {list.folders.length} folders</span></div>
+          <div className="object-header"><div className="path"><button onClick={()=>setPrefix('')}>{selected}</button>{prefix.split('/').filter(Boolean).map((part,i,all)=><React.Fragment key={i}><ChevronRight size={14}/><button onClick={()=>setPrefix(all.slice(0,i+1).join('/')+'/')}>{part}</button></React.Fragment>)}</div><div className="actions"><input ref={fileInput} type="file" multiple hidden data-testid="upload-input" onChange={e=>upload(e.target.files)}/><button className="secondary compact" onClick={deleteBucket}><Trash2 size={15}/> Delete bucket</button><button className="primary compact" onClick={()=>fileInput.current?.click()} disabled={busy}><UploadCloud size={16}/>{busy?'Working…':'Upload'}</button></div></div>
+          <div className="toolbar"><div className="searchbox"><Search size={17}/><input placeholder="Filter items in this folder..." aria-label="Filter items in this folder" value={search} onChange={e=>setSearch(e.target.value)}/></div><span className="muted small">{list.items.length} objects · {list.folders.length} folders</span></div>
           <div className="dropzone" onDragOver={e=>e.preventDefault()} onDrop={e=>{e.preventDefault();upload(e.dataTransfer.files)}}><UploadCloud size={18}/> Drop files here to upload into <strong>{prefix||'root'}</strong></div>
+          {uploads.length>0&&<div className="upload-list" data-testid="upload-status" aria-live="polite">{uploads.map(u=><div className="upload-row" key={u.id}><div className="upload-meta"><strong title={u.name}>{u.name}</strong><small>{bytes(u.size)} · {u.status==='done'?'Uploaded':u.status==='uploading'?`Uploading… ${u.progress}%`:u.status==='error'?'Failed':'Queued'}</small></div>{u.status!=='done'&&u.status!=='error'&&<div className="progress" role="progressbar" aria-valuenow={u.progress} aria-valuemin={0} aria-valuemax={100} aria-label={`Upload progress for ${u.name}`}><div className="fill" style={{width:`${u.progress}%`}}/></div>}{u.status==='error'&&<div className="upload-error" role="alert">{u.error} <button className="secondary compact" data-testid={`retry-upload-${u.id}`} onClick={()=>retryUpload(u.id)}><RefreshCw size={14}/> Retry</button></div>}{u.status==='done'&&<span className="upload-done"><CheckCircle2 size={16}/> Done</span>}</div>)}{failedCount>1&&<button className="secondary compact" data-testid="retry-uploads" onClick={retryFailed}><RefreshCw size={14}/> Retry all failed ({failedCount})</button>}</div>}
           {prefix&&<button className="back-link" onClick={()=>setPrefix(prefix.split('/').filter(Boolean).slice(0,-1).join('/').replace(/(.+)$/, '$1/') )}><ArrowLeft size={16}/> Parent folder</button>}
           <div className="object-table"><div className="table-heading"><span>Name</span><span>Size</span><span>Last modified</span><span>Actions</span></div>
           {list.folders.map(folder=><button key={folder} className="folder-row" onClick={()=>setPrefix(folder)}><span className="filename"><span className="file-symbol"><Folder size={18}/></span>{shortName(folder)}</span><span>—</span><span>Folder</span><span><ChevronRight size={16}/></span></button>)}
-          {filtered.map(obj=><div className="file-row" key={obj.key}><div className="filename">{isImage(obj.key)?<img className="thumb" loading="lazy" src={`/api/objects/thumbnail?bucket=${enc(selected)}&key=${enc(obj.key)}&width=96`} onError={e=>{e.currentTarget.style.display='none'}}/>:<span className="file-symbol"><FileIcon size={18}/></span>}<div className="name-stack"><strong title={obj.key}>{shortName(obj.key)}</strong><small>{isImage(obj.key)?'Image':'File'} · S3 object</small></div></div><span className="muted small">{bytes(obj.size)}</span><span className="muted small">{when(obj.modified)}</span><div className="file-actions">{isImage(obj.key)&&<button title="Preview" onClick={()=>setPreview(obj)}><FileImage size={16}/></button>}<a title="Download" href={`/api/objects/download?bucket=${enc(selected)}&key=${enc(obj.key)}`}><ArrowDownToLine size={16}/></a><button title="Copy signed URL" onClick={()=>linkFile(obj.key)}><Link size={16}/></button><button title="Delete" className="danger-icon" onClick={()=>deleteFile(obj.key)}><Trash2 size={16}/></button></div></div>)}
+          {filtered.map(obj=><div className="file-row" key={obj.key} data-testid="file-row" data-key={obj.key}><div className="filename">{isImage(obj.key)?<img className="thumb" loading="lazy" data-testid="object-thumbnail" alt="" src={`/api/objects/thumbnail?bucket=${enc(selected)}&key=${enc(obj.key)}&width=96`} onError={e=>{e.currentTarget.style.display='none'}}/>:<span className="file-symbol"><FileIcon size={18}/></span>}<div className="name-stack"><strong title={obj.key}>{shortName(obj.key)}</strong><small>{isImage(obj.key)?'Image':'File'} · S3 object</small></div></div><span className="muted small">{bytes(obj.size)}</span><span className="muted small">{when(obj.modified)}</span><div className="file-actions">{isImage(obj.key)&&<button title="Preview" aria-label={`Preview ${shortName(obj.key)}`} onClick={()=>setPreview(obj)}><FileImage size={16}/></button>}<a title="Download" aria-label={`Download ${shortName(obj.key)}`} data-testid="download-object" href={`/api/objects/download?bucket=${enc(selected)}&key=${enc(obj.key)}`}><ArrowDownToLine size={16}/></a><button title="Copy signed URL" aria-label={`Copy signed URL for ${shortName(obj.key)}`} onClick={()=>linkFile(obj.key)}><Link size={16}/></button><button title="Delete" aria-label={`Delete ${shortName(obj.key)}`} data-testid="delete-object" className="danger-icon" onClick={()=>deleteFile(obj.key)}><Trash2 size={16}/></button></div></div>)}
           {filtered.length===0&&list.folders.length===0&&<div className="empty"><Folder size={28}/><strong>Nothing here yet</strong><p>Upload an image or file to get started.</p></div>}
           </div>{list.continuation&&<div className="load-more"><button className="secondary" onClick={()=>reloadObjects(selected,prefix,list.continuation!)}>Load more objects</button></div>}
         </>}</section></div>
@@ -181,8 +282,8 @@ function App() {
       {page==='settings'&&<><div className="heading"><div><div className="eyebrow">CONFIGURATION</div><h1>Settings & deployment</h1><p>Instance configuration and operational guidelines.</p></div></div><section className="panel setting-panel"><h2>Current installation</h2><div className="health-item"><span>Storage engine</span><strong>SeaweedFS (S3 gateway)</strong></div><div className="health-item"><span>Management backend</span><strong>FastAPI</strong></div><div className="health-item"><span>Storage mode</span><strong>On-premises</strong></div><div className="health-item"><span>Health</span><strong className={ready==='online'?'good':'bad'}>{ready==='online'?'Connected':'Unavailable'}</strong></div><p className="panel-note">S3 credentials, admin credentials, disk and PVC size are managed through Docker/Kubernetes environment secrets. This UI intentionally never reveals secrets.</p></section><section className="panel setting-panel"><h2>Production checklist</h2>{['Configure TLS and secure cookies','Rotate generated S3/admin credentials','Use persistent Kubernetes volumes','Configure tested off-host backups','Enable network policies and rate limiting','Run S3 SDK compatibility and restore tests'].map(x=><div className="check-row" key={x}><CheckCircle2 size={18}/>{x}</div>)}</section></>}
       </div>
     </main>
-    {preview&&selected&&<div className="modal-backdrop" onClick={()=>setPreview(null)}><div className="preview-modal" onClick={e=>e.stopPropagation()}><div className="modal-header"><div><strong>{shortName(preview.key)}</strong><small>{bytes(preview.size)} · {when(preview.modified)}</small></div><button className="icon-btn" onClick={()=>setPreview(null)}><X/></button></div><img src={`/api/objects/preview?bucket=${enc(selected)}&key=${enc(preview.key)}`} alt={shortName(preview.key)}/><div className="modal-actions"><button className="secondary" onClick={()=>linkFile(preview.key)}><Copy size={16}/> Copy signed link</button><a className="primary" href={`/api/objects/download?bucket=${enc(selected)}&key=${enc(preview.key)}`}><ArrowDownToLine size={17}/> Download original</a></div></div></div>}
-    {notice&&<div className="toast"><span>{notice}</span><button onClick={()=>setNotice('')}><X size={14}/></button></div>}
+    {preview&&selected&&<div className="modal-backdrop" onClick={()=>setPreview(null)}><div className="preview-modal" role="dialog" aria-modal="true" aria-label={`Preview of ${shortName(preview.key)}`} data-testid="preview-modal" onClick={e=>e.stopPropagation()}><div className="modal-header"><div><strong>{shortName(preview.key)}</strong><small>{bytes(preview.size)} · {when(preview.modified)}</small></div><button className="icon-btn" aria-label="Close preview" autoFocus onClick={()=>setPreview(null)}><X/></button></div><img src={`/api/objects/preview?bucket=${enc(selected)}&key=${enc(preview.key)}`} alt={shortName(preview.key)}/><div className="modal-actions"><button className="secondary" onClick={()=>linkFile(preview.key)}><Copy size={16}/> Copy signed link</button><a className="primary" href={`/api/objects/download?bucket=${enc(selected)}&key=${enc(preview.key)}`}><ArrowDownToLine size={17}/> Download original</a></div></div></div>}
+    {notice&&<div className="toast" role="status"><span>{notice}</span><button aria-label="Dismiss notification" onClick={()=>setNotice('')}><X size={14}/></button></div>}
   </div>;
 }
 
