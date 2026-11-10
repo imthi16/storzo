@@ -39,9 +39,11 @@ test('console login, upload PNG, thumbnail, download, delete', async ({ page }) 
   // "New bucket" lives on the Buckets page, not the dashboard.
   await page.getByRole('button', { name: 'Buckets & objects' }).click();
 
-  // Create a bucket (the UI uses window.prompt for the name).
-  page.once('dialog', d => void d.accept(bucket));
+  // Create a bucket (an in-app dialog asks for the name).
   await page.getByRole('button', { name: 'New bucket' }).click();
+  const dialog = page.getByTestId('app-dialog');
+  await dialog.getByLabel('Name').fill(bucket);
+  await dialog.getByRole('button', { name: 'Create bucket' }).click();
   await expect(page.getByRole('button', { name: bucket }).first()).toBeVisible();
 
   // Upload a small PNG via the hidden file input.
@@ -65,13 +67,13 @@ test('console login, upload PNG, thumbnail, download, delete', async ({ page }) 
   expect(dl.headers()['content-type']).toContain('image/png');
   expect((await dl.body()).length).toBeGreaterThan(0);
 
-  // Delete the object (the UI confirms first).
-  page.once('dialog', d => void d.accept());
+  // Delete the object (an in-app dialog confirms first).
   await row.getByTestId('delete-object').click();
+  await page.getByTestId('app-dialog').getByRole('button', { name: 'Delete', exact: true }).click();
   await expect(row).toHaveCount(0, { timeout: 30_000 });
 
   // Clean up the bucket.
-  page.once('dialog', d => void d.accept());
   await page.getByRole('button', { name: 'Delete bucket' }).click();
+  await page.getByTestId('app-dialog').getByRole('button', { name: 'Delete', exact: true }).click();
   await expect(page.getByRole('button', { name: bucket })).toHaveCount(0);
 });

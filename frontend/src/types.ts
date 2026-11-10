@@ -1,0 +1,16 @@
+export type Session = {username: string; csrf: string};
+export type Bucket = {name: string; created: string};
+export type Obj = {key: string; size: number; modified: string; etag: string};
+export type Listing = {items: Obj[]; folders: string[]; continuation: string | null; prefix: string};
+export type Stats = {bucket_count: number; object_count: number; total_bytes: number; image_count: number; sampled: boolean; message: string; buckets?: BucketStat[]; by_type?: TypeStat[]; largest?: ObjRef[]; recent?: ObjRef[]};
+export type BucketStat = {name: string; object_count: number; total_bytes: number};
+export type TypeStat = {type: 'image' | 'video' | 'audio' | 'document' | 'archive' | 'other'; count: number; bytes: number};
+export type ObjRef = {bucket: string; key: string; size: number; modified: string};
+export type SortKey = 'name' | 'size' | 'modified';
+export type Preview = {obj: Obj; bucket: string};
+export type Audit = {id: number; ts: string; actor: string; action: string; bucket: string | null; object_key: string | null; detail: string | null};
+export type Page = 'dashboard' | 'buckets' | 'activity' | 'activity-detail' | 'settings';
+export type ActivityPage = {items: Audit[]; total: number; limit: number; offset: number};
+export type UploadItem = {id: number; name: string; size: number; status: 'queued' | 'uploading' | 'done' | 'error'; progress: number; error: string; file: File; bucket: string; key: string; retry: boolean};
+export type DialogState = {submit?: (v: string) => Promise<string>; validate?: (v: string) => string; title: string; message?: string; label?: string; confirmLabel: string; danger?: boolean; text: boolean; resolve: (v: string | boolean | null) => void};
+export type RefItem = {bucket: string; key: string; size: number; modified: string};
