@@ -506,3 +506,20 @@ def test_audit_pagination_total_and_detail(monkeypatch, tmp_path):
         c.cookies.clear()
         assert c.get('/api/audit/1').status_code == 401
     finally: c.__exit__(None, None, None)
+
+
+def test_uploads_by_day_counts_full_window_not_last_200_events(monkeypatch, tmp_path):
+    c, _fake = setup_client(monkeypatch, tmp_path)
+    try:
+        login(c)
+        from app import db
+        for _ in range(3):
+            db.audit('upload', 'demo-images', 'a.png')
+        for _ in range(250):
+            db.audit('delete', 'demo-images', 'a.png')
+        items = c.get('/api/audit/uploads-by-day?days=14').json()['items']
+        assert len(items) == 14
+        assert items[-1]['count'] == 3 and sum(i['count'] for i in items) == 3
+        c.cookies.clear()
+        assert c.get('/api/audit/uploads-by-day').status_code == 401
+    finally: c.__exit__(None, None, None)

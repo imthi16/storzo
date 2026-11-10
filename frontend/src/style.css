@@ -415,3 +415,5 @@ button.activity-row>svg{color:var(--text-3)}
 
 /* ---- fixed-size bucket bars: panel never grows with rows per page ---- */
 .bar-list{height:300px;overflow-y:auto}
+.folder-card{cursor:pointer;text-align:left;font:inherit;color:inherit;padding:0}
+.folder-card:focus-visible{outline:2px solid var(--label);outline-offset:1px}

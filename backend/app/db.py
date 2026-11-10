@@ -1,6 +1,6 @@
 """SQLite audit trail (single writer, WAL)."""
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from app import config
 
@@ -42,3 +42,12 @@ def get_audit(audit_id: int) -> dict | None:
         db.row_factory = sqlite3.Row
         row = db.execute(f'SELECT {_COLUMNS} FROM audit WHERE id=?', (audit_id,)).fetchone()
     return dict(row) if row else None
+
+
+def count_by_day(action: str, days: int) -> dict[str, int]:
+    """Events of one action per UTC day over the last `days` days, aggregated in SQL."""
+    since = (datetime.now(timezone.utc) - timedelta(days=days - 1)).strftime('%Y-%m-%d')
+    with connect() as db:
+        rows = db.execute('SELECT substr(ts,1,10) AS day, COUNT(*) FROM audit WHERE action=? AND substr(ts,1,10)>=? GROUP BY day',
+                          (action, since)).fetchall()
+    return {day: n for day, n in rows}

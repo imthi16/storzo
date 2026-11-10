@@ -43,7 +43,7 @@ export function App() {
   }, [selected, prefix, session, pageSize]);
   const [stats, setStats] = useState<Stats | null>(null);
   const [statsAt, setStatsAt] = useState<number | null>(null);
-  const [audit, setAudit] = useState<Audit[]>([]);
+  const [uploadCounts, setUploadCounts] = useState<{day: string; count: number}[]>([]);
   const [activity, setActivity] = useState<ActivityPage | null>(null);
   const [activityOffset, setActivityOffset] = useState(0);
   const [entry, setEntry] = useState<Audit | null>(null);
@@ -94,7 +94,7 @@ export function App() {
   }, [preview]);
   const reloadBuckets = async () => { const d = await call<{items: Bucket[]}>('/buckets'); setBuckets(d.items); };
   const reloadStats = async () => { const d = await call<Stats>('/dashboard'); setStats(d); setStatsAt(Date.now()); };
-  const reloadAudit = async () => { const d = await call<ActivityPage>('/audit?limit=200'); setAudit(d.items); };
+  const reloadAudit = async () => { const d = await call<{items: {day: string; count: number}[]}>('/audit/uploads-by-day?days=14'); setUploadCounts(d.items); };
   const reloadActivity = async (offset = activityOffset) => { const d = await call<ActivityPage>(`/audit?limit=${pageSize}&offset=${offset}`); setActivity(d); };
   const reloadObjects = async (bucket = selected, path = prefix, token = pager.tokens[pager.index] ?? '') => {
     if (!bucket || bucket !== objectLocation.current.bucket || path !== objectLocation.current.prefix) return;
@@ -114,16 +114,21 @@ export function App() {
       if (request === listingRequest.current) throw error;
     }
   };
+  const [navigating, setNavigating] = useState(false);
+  const navLock = useRef(false);
+  const navigate = (to: string, update: () => void) => {
+    if (navLock.current || !selected) return;
+    navLock.current = true; setNavigating(true); update(); setChecked([]);
+    reloadObjects(selected, prefix, to).catch(fail).finally(() => { navLock.current = false; setNavigating(false); });
+  };
   const goNextObjects = () => {
     const next = list.continuation; if (!next || !selected) return;
-    setPager(old => ({index: old.index + 1, tokens: [...old.tokens.slice(0, old.index + 1), next]}));
-    setChecked([]); reloadObjects(selected, prefix, next).catch(fail);
+    navigate(next, () => setPager(old => ({index: old.index + 1, tokens: [...old.tokens.slice(0, old.index + 1), next]})));
   };
   const goPrevObjects = () => {
     if (pager.index === 0 || !selected) return;
     const token = pager.tokens[pager.index - 1];
-    setPager(old => ({index: old.index - 1, tokens: old.tokens}));
-    setChecked([]); reloadObjects(selected, prefix, token).catch(fail);
+    navigate(token, () => setPager(old => ({index: old.index - 1, tokens: old.tokens})));
   };
   const changePageSize = (n: number) => { setPageSize(n); setActivityOffset(0); setBarPage(0); try { localStorage.setItem('storzo.pageSize', String(n)); } catch { /* optional */ } };
   const refresh = async () => {
@@ -313,20 +318,8 @@ export function App() {
   };
   const openBucket = (name: string) => { setSelected(name); setPrefix(''); setSearch(''); setPage('buckets'); };
   const openPreview = (obj: Obj, bucket: string) => setPreview({obj, bucket});
-  // Upload counts per day for the last 14 days, from audit entries whose action contains "upload".
-  const uploadDays = (() => {
-    const out = Array.from({length: 14}, (_, i) => {
-      const d = new Date(); d.setDate(d.getDate() - (13 - i));
-      return {day: d.toISOString().slice(0, 10), label: d.toLocaleDateString(undefined, {month: 'short', day: 'numeric'}), count: 0};
-    });
-    for (const e of audit) {
-      if (!e.action.toLowerCase().includes('upload')) continue;
-      const day = (e.ts || '').slice(0, 10);
-      const slot = out.find(s => s.day === day);
-      if (slot) slot.count++;
-    }
-    return out;
-  })();
+  // Per-day upload counts come pre-aggregated from the server (UTC days), so the chart covers the whole 14-day window.
+  const uploadDays = uploadCounts.map(d => ({label: new Date(d.day + 'T12:00:00Z').toLocaleDateString(undefined, {month: 'short', day: 'numeric', timeZone: 'UTC'}), count: d.count}));
   const updatedAgo = statsAt == null ? null : Math.max(0, Math.round((now - statsAt) / 1000));
 
   if (booting) return <div className="loading"><Database size={35}/><p>Connecting to Storzo…</p></div>;
@@ -348,7 +341,7 @@ export function App() {
       <header className="topbar"><button className="mobile-toggle icon-btn" aria-label="Toggle navigation menu" onClick={()=>setMenuOpen(!menuOpen)}><Menu/></button><nav className="breadcrumbs" aria-label="Breadcrumb"><button className="crumb crumb-root" onClick={()=>nav('dashboard')}>Workspace</button><ChevronRight size={15} className="crumb-root"/>{page==='activity-detail'?<><button className="crumb" onClick={()=>nav('activity')}>Activity log</button><ChevronRight size={15}/><strong aria-current="page">Event #{activityId}</strong></>:<strong aria-current="page">{page==='dashboard'?'Overview':page==='buckets'?'Buckets & objects':page==='activity'?'Activity log':'Settings'}</strong>}</nav><div className="top-actions"><button className="secondary compact" onClick={refresh} disabled={busy}><RefreshCw size={16} className={busy?'spin':''}/> Refresh</button></div></header>
       <div className="page-body">
       {page==='dashboard' && <OverviewPage stats={stats} updatedAgo={updatedAgo} uploadDays={uploadDays} ready={ready} barPage={barPage} setBarPage={setBarPage} pageSize={pageSize} changePageSize={changePageSize} openBucket={openBucket} openPreview={openPreview} nav={nav}/>}
-      {page==='buckets' && <BucketsPage createBucket={createBucket} buckets={buckets} bucketFilter={bucketFilter} setBucketFilter={setBucketFilter} selected={selected} openBucket={openBucket} onDragEnter={onDragEnter} onDragOverPanel={onDragOverPanel} onDragLeave={onDragLeave} onDropFiles={onDropFiles} dragging={dragging} prefix={prefix} setPrefix={setPrefix} fileInput={fileInput} upload={upload} deleteBucket={deleteBucket} busy={busy} search={search} setSearch={setSearch} typeFilter={typeFilter} setTypeFilter={setTypeFilter} view={view} setViewPersist={setViewPersist} checked={checked} setChecked={setChecked} checkedBytes={checkedBytes} deleteSelected={deleteSelected} toggleCheck={toggleCheck} uploads={uploads} setUploads={setUploads} retryUpload={retryUpload} failedCount={failedCount} retryFailed={retryFailed} listing={listing} list={list} filtered={filtered} openPreview={openPreview} linkFile={linkFile} deleteFile={deleteFile} sortLabel={sortLabel} clickSort={clickSort} sortArrow={sortArrow} pageSize={pageSize} changePageSize={changePageSize} pager={pager} goPrevObjects={goPrevObjects} goNextObjects={goNextObjects}/>}
+      {page==='buckets' && <BucketsPage createBucket={createBucket} buckets={buckets} bucketFilter={bucketFilter} setBucketFilter={setBucketFilter} selected={selected} openBucket={openBucket} onDragEnter={onDragEnter} onDragOverPanel={onDragOverPanel} onDragLeave={onDragLeave} onDropFiles={onDropFiles} dragging={dragging} prefix={prefix} setPrefix={setPrefix} fileInput={fileInput} upload={upload} deleteBucket={deleteBucket} busy={busy} search={search} setSearch={setSearch} typeFilter={typeFilter} setTypeFilter={setTypeFilter} view={view} setViewPersist={setViewPersist} checked={checked} setChecked={setChecked} checkedBytes={checkedBytes} deleteSelected={deleteSelected} toggleCheck={toggleCheck} uploads={uploads} setUploads={setUploads} retryUpload={retryUpload} failedCount={failedCount} retryFailed={retryFailed} listing={listing} list={list} filtered={filtered} openPreview={openPreview} linkFile={linkFile} deleteFile={deleteFile} sortLabel={sortLabel} clickSort={clickSort} sortArrow={sortArrow} pageSize={pageSize} changePageSize={changePageSize} pager={pager} goPrevObjects={goPrevObjects} navigating={navigating} goNextObjects={goNextObjects}/>}
       {page==='activity' && <ActivityListPage activity={activity} pageSize={pageSize} changePageSize={changePageSize} setActivityOffset={setActivityOffset} openActivity={openActivity} reloadActivity={reloadActivity} fail={fail}/>}
       {page==='activity-detail' && <ActivityEventPage entry={entry} entryError={entryError} activityId={activityId} nav={nav} openLocation={openLocation}/>}
       {page==='settings' && <SettingsPage ready={ready}/>}

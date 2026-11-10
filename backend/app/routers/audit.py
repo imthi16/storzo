@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta, timezone
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app import db
@@ -11,6 +13,15 @@ def audit_logs(limit: int = Query(50, ge=1, le=200), offset: int = Query(0, ge=0
                _sess: dict = Depends(require_login)):
     items, total = db.list_audit(limit, offset)
     return {'items': items, 'total': total, 'limit': limit, 'offset': offset}
+
+
+@router.get('/uploads-by-day')  # must stay above /{audit_id}
+def uploads_by_day(days: int = Query(14, ge=1, le=90), _sess: dict = Depends(require_login)):
+    counts = db.count_by_day('upload', days)
+    today = datetime.now(timezone.utc).date()
+    items = [{'day': str(today - timedelta(days=i)), 'count': counts.get(str(today - timedelta(days=i)), 0)}
+             for i in range(days - 1, -1, -1)]
+    return {'items': items}
 
 
 @router.get('/{audit_id}')
