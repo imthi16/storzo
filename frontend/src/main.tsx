@@ -95,6 +95,10 @@ function App() {
   const [audit, setAudit] = useState<Audit[]>([]);
   const [ready, setReady] = useState<'checking'|'online'|'offline'>('checking');
   const [busy, setBusy] = useState(false);
+  const busyCount = useRef(0);
+  const enterBusy = () => { busyCount.current += 1; setBusy(true); };
+  const exitBusy = () => { busyCount.current = Math.max(0, busyCount.current - 1); if (busyCount.current === 0) setBusy(false); };
+  const activeRetries = useRef<Set<number>>(new Set());
   const [search, setSearch] = useState('');
   const [preview, setPreview] = useState<Obj | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -137,13 +141,13 @@ function App() {
     }
   };
   const refresh = async () => {
-    setBusy(true);
+    enterBusy();
     try {
       if (page === 'dashboard') await Promise.all([reloadStats(), reloadBuckets()]);
       if (page === 'buckets') { await reloadBuckets(); if (selected) await reloadObjects(); }
       if (page === 'activity') await reloadAudit();
       const res = await fetch('/api/health/ready'); setReady(res.ok ? 'online' : 'offline');
-    } catch(e) { fail(e); } finally { setBusy(false); }
+    } catch(e) { fail(e); } finally { exitBusy(); }
   };
 
   useEffect(() => { call<Session>('/auth/me').then(setSession).catch(() => setSession(null)).finally(() => setBooting(false)); }, []);
@@ -159,9 +163,9 @@ function App() {
   const createBucket = async () => {
     const name = window.prompt('New bucket name (lowercase letters, numbers, hyphens):');
     if (!name) return;
-    setBusy(true);
+    enterBusy();
     try { await call('/buckets', csrf, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({name:name.trim()})}); await reloadBuckets(); setSelected(name.trim()); setPrefix(''); setPage('buckets'); show('Bucket created'); }
-    catch(e) { fail(e); } finally { setBusy(false); }
+    catch(e) { fail(e); } finally { exitBusy(); }
   };
   const deleteBucket = async () => {
     if (!selected || !window.confirm(`Delete empty bucket "${selected}"? This cannot be undone.`)) return;
@@ -198,27 +202,59 @@ function App() {
     const bucket = selected, folder = prefix;
     const batch: UploadItem[] = Array.from(files).map(file =>
       ({id: ++uploadSeq.current, name: file.name, size: file.size, status: 'queued' as const, progress: 0, error: '', file, bucket, key: folder + file.name}));
-    setUploads(old => [...batch, ...old].slice(0, 20));
+    setUploads(old => {
+      const merged = [...batch, ...old];
+      let doneKept = 0;
+      return merged.filter(u => {
+        if (u.status !== 'done') return true;
+        if (doneKept < 20) { doneKept += 1; return true; }
+        return false;
+      });
+    });
     if (fileInput.current) fileInput.current.value = '';
-    setBusy(true);
-    for (const item of batch) await runUpload(item);
-    setBusy(false);
+    enterBusy();
+    try {
+      for (const item of batch) await runUpload(item);
+    } finally { exitBusy(); }
     try { await reloadObjects(); await reloadStats(); } catch(e) { fail(e); }
   };
   const retryUpload = async (id: number) => {
+    if (activeRetries.current.has(id)) return;
     const item = uploads.find(u => u.id === id);
     if (!item || item.status !== 'error') return;
-    setBusy(true);
-    const ok = await runUpload(item);
-    setBusy(false);
-    if (ok) await refreshAfterRetry(item);
+    activeRetries.current.add(id);
+    enterBusy();
+    setUploads(old => old.map(u => u.id === id && u.status === 'error' ? {...u, status: 'queued' as const, error: ''} : u));
+    try {
+      const ok = await runUpload(item);
+      if (ok) await refreshAfterRetry(item);
+    } finally {
+      activeRetries.current.delete(id);
+      exitBusy();
+    }
   };
   const retryFailed = async () => {
-    const failed = uploads.filter(u => u.status === 'error');
-    setBusy(true);
+    const failed = uploads.filter(u => u.status === 'error' && !activeRetries.current.has(u.id));
+    if (failed.length === 0) return;
+    const ids = failed.map(i => i.id);
+    ids.forEach(id => activeRetries.current.add(id));
+    enterBusy();
+    setUploads(old => {
+      const idSet = new Set(ids);
+      return old.map(u => idSet.has(u.id) && u.status === 'error' ? {...u, status: 'queued' as const, error: ''} : u);
+    });
+    const byId = new Map(failed.map(i => [i.id, i]));
     const succeeded: UploadItem[] = [];
-    for (const item of failed) { if (await runUpload(item)) succeeded.push(item); }
-    setBusy(false);
+    try {
+      for (const id of ids) {
+        const item = byId.get(id);
+        if (!item) continue;
+        if (await runUpload(item)) succeeded.push(item);
+      }
+    } finally {
+      ids.forEach(id => activeRetries.current.delete(id));
+      exitBusy();
+    }
     for (const item of succeeded) await refreshAfterRetry(item);
   };
   const failedCount = uploads.filter(u => u.status === 'error').length;
@@ -269,7 +305,7 @@ function App() {
           <div className="object-header"><div className="path"><button onClick={()=>setPrefix('')}>{selected}</button>{prefix.split('/').filter(Boolean).map((part,i,all)=><React.Fragment key={i}><ChevronRight size={14}/><button onClick={()=>setPrefix(all.slice(0,i+1).join('/')+'/')}>{part}</button></React.Fragment>)}</div><div className="actions"><input ref={fileInput} type="file" multiple hidden data-testid="upload-input" onChange={e=>upload(e.target.files)}/><button className="secondary compact" onClick={deleteBucket}><Trash2 size={15}/> Delete bucket</button><button className="primary compact" onClick={()=>fileInput.current?.click()} disabled={busy}><UploadCloud size={16}/>{busy?'Working…':'Upload'}</button></div></div>
           <div className="toolbar"><div className="searchbox"><Search size={17}/><input placeholder="Filter items in this folder..." aria-label="Filter items in this folder" value={search} onChange={e=>setSearch(e.target.value)}/></div><span className="muted small">{list.items.length} objects · {list.folders.length} folders</span></div>
           <div className="dropzone" onDragOver={e=>e.preventDefault()} onDrop={e=>{e.preventDefault();upload(e.dataTransfer.files)}}><UploadCloud size={18}/> Drop files here to upload into <strong>{prefix||'root'}</strong></div>
-          {uploads.length>0&&<div className="upload-list" data-testid="upload-status" aria-live="polite">{uploads.map(u=><div className="upload-row" key={u.id}><div className="upload-meta"><strong title={u.name}>{u.name}</strong><small>{bytes(u.size)} · {u.status==='done'?'Uploaded':u.status==='uploading'?`Uploading… ${u.progress}%`:u.status==='error'?'Failed':'Queued'}</small></div>{u.status!=='done'&&u.status!=='error'&&<div className="progress" role="progressbar" aria-valuenow={u.progress} aria-valuemin={0} aria-valuemax={100} aria-label={`Upload progress for ${u.name}`}><div className="fill" style={{width:`${u.progress}%`}}/></div>}{u.status==='error'&&<div className="upload-error" role="alert">{u.error} <button className="secondary compact" data-testid={`retry-upload-${u.id}`} onClick={()=>retryUpload(u.id)}><RefreshCw size={14}/> Retry</button></div>}{u.status==='done'&&<span className="upload-done"><CheckCircle2 size={16}/> Done</span>}</div>)}{failedCount>1&&<button className="secondary compact" data-testid="retry-uploads" onClick={retryFailed}><RefreshCw size={14}/> Retry all failed ({failedCount})</button>}</div>}
+          {uploads.length>0&&<div className="upload-list" data-testid="upload-status" aria-live="polite">{uploads.map(u=><div className="upload-row" key={u.id}><div className="upload-meta"><strong title={u.name}>{u.name}</strong><small>{bytes(u.size)} · {u.status==='done'?'Uploaded':u.status==='uploading'?`Uploading… ${u.progress}%`:u.status==='error'?'Failed':'Queued'}</small></div>{u.status!=='done'&&u.status!=='error'&&<div className="progress" role="progressbar" aria-valuenow={u.progress} aria-valuemin={0} aria-valuemax={100} aria-label={`Upload progress for ${u.name}`}><div className="fill" style={{width:`${u.progress}%`}}/></div>}{u.status==='error'&&<div className="upload-error" role="alert">{u.error} <button className="secondary compact" data-testid={`retry-upload-${u.id}`} onClick={()=>retryUpload(u.id)} disabled={busy}><RefreshCw size={14}/> Retry</button></div>}{u.status==='done'&&<span className="upload-done"><CheckCircle2 size={16}/> Done</span>}</div>)}{failedCount>1&&<button className="secondary compact" data-testid="retry-uploads" onClick={retryFailed} disabled={busy}><RefreshCw size={14}/> Retry all failed ({failedCount})</button>}</div>}
           {prefix&&<button className="back-link" onClick={()=>setPrefix(prefix.split('/').filter(Boolean).slice(0,-1).join('/').replace(/(.+)$/, '$1/') )}><ArrowLeft size={16}/> Parent folder</button>}
           <div className="object-table"><div className="table-heading"><span>Name</span><span>Size</span><span>Last modified</span><span>Actions</span></div>
           {list.folders.map(folder=><button key={folder} className="folder-row" onClick={()=>setPrefix(folder)}><span className="filename"><span className="file-symbol"><Folder size={18}/></span>{shortName(folder)}</span><span>—</span><span>Folder</span><span><ChevronRight size={16}/></span></button>)}
