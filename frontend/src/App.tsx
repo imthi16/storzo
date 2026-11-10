@@ -54,6 +54,10 @@ export function App() {
   const dragDepth = useRef(0);
   const [ready, setReady] = useState<'checking'|'online'|'offline'>('checking');
   const [busy, setBusy] = useState(false);
+  const busyCount = useRef(0);
+  const enterBusy = () => { busyCount.current += 1; setBusy(true); };
+  const exitBusy = () => { busyCount.current = Math.max(0, busyCount.current - 1); if (busyCount.current === 0) setBusy(false); };
+  const activeRetries = useRef<Set<number>>(new Set());
   const [search, setSearch] = useState('');
   const [dialog, setDialog] = useState<DialogState | null>(null);
   const closeDialog = (v: string | boolean | null) => { dialog?.resolve(v); setDialog(null); };
@@ -123,13 +127,13 @@ export function App() {
   };
   const changePageSize = (n: number) => { setPageSize(n); setActivityOffset(0); setBarPage(0); try { localStorage.setItem('storzo.pageSize', String(n)); } catch { /* optional */ } };
   const refresh = async () => {
-    setBusy(true);
+    enterBusy();
     try {
       if (page === 'dashboard') await Promise.all([reloadStats(), reloadBuckets(), reloadAudit()]);
       if (page === 'buckets') { await reloadBuckets(); if (selected) await reloadObjects(); }
       if (page === 'activity') await reloadActivity();
       const res = await fetch('/api/health/ready'); setReady(res.ok ? 'online' : 'offline');
-    } catch(e) { fail(e); } finally { setBusy(false); }
+    } catch(e) { fail(e); } finally { exitBusy(); }
   };
 
   useEffect(() => { call<Session>('/auth/me').then(setSession).catch(() => setSession(null)).finally(() => setBooting(false)); }, []);
@@ -182,9 +186,9 @@ export function App() {
       catch (e) { if (e instanceof ApiError && e.isSession) { fail(e); throw e; } return e instanceof Error ? e.message : 'Could not create the bucket. Try again.'; }
     });
     if (!name) return;
-    setBusy(true);
+    enterBusy();
     try { await reloadBuckets(); setSelected(name); setPrefix(''); setPage('buckets'); show('Bucket created'); }
-    catch(e) { fail(e); } finally { setBusy(false); }
+    catch(e) { fail(e); } finally { exitBusy(); }
   };
   const deleteBucket = async () => {
     if (!selected || !(await askConfirm('Delete bucket', `Delete "${selected}"? Only empty buckets can be deleted. This cannot be undone.`, 'Delete'))) return;
@@ -221,27 +225,35 @@ export function App() {
     const bucket = selected, folder = prefix;
     const batch: UploadItem[] = Array.from(files).map(file =>
       ({id: ++uploadSeq.current, name: file.name, size: file.size, status: 'queued' as const, progress: 0, error: '', file, bucket, key: folder + file.name, retry: true}));
-    setUploads(old => [...batch, ...old].slice(0, 20));
+    // Cap history at 20 finished entries; queued, uploading and failed items are never dropped.
+    setUploads(old => { let done = 0; return [...batch, ...old].filter(u => u.status !== 'done' || ++done <= 20); });
     if (fileInput.current) fileInput.current.value = '';
-    setBusy(true);
-    for (const item of batch) await runUpload(item);
-    setBusy(false);
+    enterBusy();
+    try { for (const item of batch) await runUpload(item); } finally { exitBusy(); }
     try { await reloadObjects(); await reloadStats(); } catch(e) { fail(e); }
   };
   const retryUpload = async (id: number) => {
+    if (activeRetries.current.has(id)) return;
     const item = uploads.find(u => u.id === id);
     if (!item || item.status !== 'error') return;
-    setBusy(true);
-    const ok = await runUpload(item);
-    setBusy(false);
-    if (ok) await refreshAfterRetry(item);
+    activeRetries.current.add(id);
+    enterBusy();
+    setUploads(old => old.map(u => u.id === id && u.status === 'error' ? {...u, status: 'queued' as const, error: ''} : u));
+    try {
+      if (await runUpload(item)) await refreshAfterRetry(item);
+    } finally { activeRetries.current.delete(id); exitBusy(); }
   };
   const retryFailed = async () => {
-    const failed = uploads.filter(u => u.status === 'error' && u.retry);
-    setBusy(true);
+    const failed = uploads.filter(u => u.status === 'error' && u.retry && !activeRetries.current.has(u.id));
+    if (failed.length === 0) return;
+    const ids = new Set(failed.map(u => u.id));
+    ids.forEach(id => activeRetries.current.add(id));
+    enterBusy();
+    setUploads(old => old.map(u => ids.has(u.id) && u.status === 'error' ? {...u, status: 'queued' as const, error: ''} : u));
     const succeeded: UploadItem[] = [];
-    for (const item of failed) { if (await runUpload(item)) succeeded.push(item); }
-    setBusy(false);
+    try {
+      for (const item of failed) { if (await runUpload(item)) succeeded.push(item); }
+    } finally { ids.forEach(id => activeRetries.current.delete(id)); exitBusy(); }
     for (const item of succeeded) await refreshAfterRetry(item);
   };
   const failedCount = uploads.filter(u => u.status === 'error' && u.retry).length;
@@ -288,14 +300,14 @@ export function App() {
   const deleteSelected = async () => {
     if (!selected || checked.length === 0) return;
     if (!(await askConfirm('Delete selected', `Permanently delete ${plural(checked.length, 'object')} from "${selected}"? This cannot be undone.`, 'Delete'))) return;
-    setBusy(true);
+    enterBusy();
     let ok = 0; const failed: string[] = [];
     for (const key of checked) {
       try { await call(`/objects?bucket=${enc(selected)}&key=${enc(key)}`, csrf, {method: 'DELETE'}); ok++; }
       catch { failed.push(shortName(key)); }
     }
     setChecked([]);
-    setBusy(false);
+    exitBusy();
     try { await reloadObjects(); } catch(e) { fail(e); }
     show(failed.length === 0 ? `Deleted ${ok} object(s)` : `Deleted ${ok}, failed ${failed.length}: ${failed.slice(0, 3).join(', ')}${failed.length > 3 ? '…' : ''}`);
   };
