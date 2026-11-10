@@ -48,6 +48,8 @@ Existing application ----------> SeaweedFS S3 gateway :8333
 - Thumbnail generation is synchronous and limited to image files <= 12 MiB; production requires bounded worker queues, caching, decompression safeguards, MIME verification, limits, and safe SVG handling.
 - UI upload limit defaults to 50 MiB, separate from the native S3 gateway's multipart behavior.
 
+`GET /api/dashboard` retains its existing totals and adds `buckets` (name, object_count, total_bytes; descending bytes), `by_type` (type, count, bytes; descending bytes), `largest` (up to five objects by descending size), and `recent` (up to eight by descending modification time). Object entries contain bucket, key, size and an ISO-8601 modified timestamp. Types are image, video, audio, document, archive or other, classified by lowercase file extension; only nonempty types appear. All fields reuse the same capped 3,000-object listing without additional S3 calls. Empty buckets and buckets not reached before the cap appear with zero counts/bytes; `sampled` and `message` retain their existing meaning, so these lists describe the scanned sample rather than full-storage rankings.
+
 ## Deployment components
 
 - **`storage`:** upstream `chrislusf/seaweedfs` container running single-node `weed mini` and local data volume.
