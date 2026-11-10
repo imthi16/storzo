@@ -9,6 +9,18 @@ fi
 set -a
 source .env
 set +a
+if [[ -z "${ADMIN_PASSWORD:-}" || ${#ADMIN_PASSWORD} -lt 16 ]]; then
+  echo 'ADMIN_PASSWORD must have at least 16 characters' >&2
+  exit 1
+fi
+if [[ -z "${SESSION_SECRET:-}" || ${#SESSION_SECRET} -lt 32 ]]; then
+  echo 'SESSION_SECRET must have at least 32 characters' >&2
+  exit 1
+fi
+if [[ -z "${S3_ACCESS_KEY:-}" || -z "${S3_SECRET_KEY:-}" ]]; then
+  echo 'S3_ACCESS_KEY and S3_SECRET_KEY must be set' >&2
+  exit 1
+fi
 NAMESPACE="${NAMESPACE:-storzo-demo}"
 TMP_VALUES="$(mktemp)"
 TMP_SECRET="$(mktemp)"
