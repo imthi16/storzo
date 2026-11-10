@@ -34,3 +34,8 @@ storage-data/
 *.egg-info/
 secrets.yaml
 values-private.yaml
+
+# Playwright / TypeScript build artefacts
+frontend/test-results/
+frontend/playwright-report/
+frontend/*.tsbuildinfo

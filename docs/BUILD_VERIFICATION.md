@@ -4,7 +4,7 @@ This record distinguishes checks **run by the authoring environment** from check
 
 | Check | Status | Method |
 |---|---|---|
-| Backend Python syntax | PASS | `python -m py_compile backend/app/main.py` |
+| Backend Python syntax | PASS | `python -m compileall -q backend/app` |
 | Backend API tests | PASS: 3 cases | `cd backend && pytest -q` using FakeS3; auth/CSRF + S3 management flows + thumbnail + invalid input |
 | React TSX syntax parser | PASS: 0 diagnostics | TypeScript 5.8.3 `transpileModule` in Node; **not** full React build/typecheck |
 | Compose YAML parsing | PASS | `PyYAML safe_load` parsed the service definitions |

@@ -32,15 +32,15 @@ CI (`.github/workflows/ci.yml`) runs backend pytest, the frontend build, and `se
 
 ## Architecture
 
-- **`backend/app/main.py`** — the entire backend in one file (~400 lines). Config is module-level constants read from env at import time (`S3_ENDPOINT`, `S3_PUBLIC_ENDPOINT`, `ADMIN_PASSWORD`, `SESSION_SECRET`, `AUDIT_DB_PATH`, `MAX_UPLOAD_MB`, …).
+- **`backend/app/`** — layered FastAPI package: `main.py` (app factory + startup checks), `config.py` (env constants, read at import time), `security.py` (signed session cookie + CSRF, `safe_bucket`/`safe_key`, `s3_failure`), `s3.py` (cached boto3 clients), `db.py` (SQLite audit, WAL), `stats.py` (bounded dashboard scan), `schemas.py`, and `routers/` (`health`, `auth`, `buckets`, `objects`, `audit`, `dashboard`).
   - Single admin user, no user table. Login issues a signed (`itsdangerous`) HttpOnly `storzo_session` cookie containing a CSRF token. Read endpoints depend on `require_login`; every mutating endpoint depends on `require_write`, which also requires the `x-csrf-token` header to match. New mutating routes must use `require_write`.
   - Startup fails closed: `ADMIN_PASSWORD` ≥16 chars, `SESSION_SECRET` ≥32 chars, and S3 keys must be set, or the app refuses to start.
-  - Two cached boto3 clients via `s3_client(public)`: the internal endpoint for server-side calls, and the public endpoint (`S3_PUBLIC_ENDPOINT`) used only to sign presigned URLs the browser will open. These differ in Docker/Kubernetes.
-  - All user-supplied bucket/key input goes through `safe_bucket` / `safe_key`; S3 errors are mapped to HTTP codes in `s3_failure`.
-  - Audit trail is SQLite (`audit` table, WAL) written via `audit()`. Single writer → the Helm chart pins the backend to one replica.
+  - Two cached boto3 clients via `s3.s3_client(public)`: the internal endpoint for server-side calls, and the public endpoint (`S3_PUBLIC_ENDPOINT`) used only to sign presigned URLs the browser will open. Always call it as `s3.s3_client()` (module attribute) so tests can swap it.
+  - All user-supplied bucket/key input goes through `safe_bucket` / `safe_key`; S3 errors are mapped to HTTP codes in `s3_failure`. SeaweedFS deletes non-empty buckets, so `delete_bucket` enforces emptiness itself (409).
+  - Audit trail is SQLite (`audit` table, WAL) written via `db.audit()`. Single writer → the Helm chart pins the backend to one replica.
   - Thumbnails are generated on demand to WebP via Pillow with pixel/size caps; originals are never modified. Dashboard scans at most 3,000 objects and reports partial results.
-- **`backend/tests/test_api.py`** — sets env vars *before* `from app import main`, then swaps `main.s3_client` for a `FakeS3`. Extend `FakeS3` when a new route calls a new boto3 method.
-- **`frontend/src/main.tsx`** — the whole React 19 + Vite + TypeScript console in one file (`style.css` alongside, icons from `lucide-react`). nginx (`frontend/nginx.conf`) serves the build and proxies `/api/` to `BACKEND_UPSTREAM`.
+- **`backend/tests/test_api.py`** — sets env vars *before* importing `app`, then swaps `s3.s3_client` for a `FakeS3`. Extend `FakeS3` when a new route calls a new boto3 method.
+- **`frontend/src/`** — React 19 + Vite + TypeScript console. `main.tsx` mounts `App.tsx` (state, effects, handlers); `pages/` (Login, Overview, Buckets, ActivityList, ActivityEvent, Settings), `components/` (AppDialog, Pager, RefRow, ActivityDetail, TypeDonut, UploadSpark), `api/` (`client.ts` fetch + friendly `ApiError`, `upload.ts` XHR progress), `lib/` (format helpers, hash routes), `types.ts`, `constants.ts`, `style.css`. Icons from `lucide-react`. nginx (`frontend/nginx.conf`) serves the build and proxies `/api/` to `BACKEND_UPSTREAM`. E2E specs live in `frontend/e2e` (`npm run e2e`, needs `E2E_ADMIN_PASSWORD`).
 - **Deploy**: `compose.yaml` (storage + backend + frontend, volumes `storage-data` and `audit-data`, ports bound to loopback by default); `deploy/helm/storzo` is the chart for backend/frontend only — SeaweedFS itself is installed from its official chart with `deploy/seaweedfs-values-demo.yaml` by `scripts/k8s_demo_install.sh`.
 - **`docs/`** — `ARCHITECTURE.md`, `SECURITY_CHECKLIST.md`, `MIGRATION.md`, `FEATURE_MATRIX.md`, `TL_DEMO.md`. README is deliberately conservative about production-readiness claims; keep new docs/claims consistent with that.
 
