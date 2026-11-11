@@ -1,97 +1,157 @@
-# Storzo 0.1.0 — Self-hosted S3 image storage console
+<p align="center">
+  <img src="docs/assets/storzo-banner.svg" alt="Storzo — Your images. Your infrastructure. A self-hosted image storage console over SeaweedFS S3." width="100%" />
+</p>
 
-**Working-source MVP for a MinIO-to-local-storage evaluation. No GCS or AWS account required.**
+<p align="center">
+  <a href="https://github.com/imthi16/storzo/actions/workflows/ci.yml"><img src="https://github.com/imthi16/storzo/actions/workflows/ci.yml/badge.svg" alt="Storzo CI" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-e8c547?labelColor=171f27" alt="License: MIT" /></a>
+  <a href="#project-status"><img src="https://img.shields.io/badge/status-prototype-e8c547?labelColor=171f27" alt="Status: prototype" /></a>
+</p>
 
-Storzo combines a custom React management console and FastAPI image-management backend with the open-source **SeaweedFS** S3 storage engine. The application objects live in local Docker volumes or Kubernetes PersistentVolumes, **not** in a SaaS cloud. Applications can use the SeaweedFS S3 endpoint directly with AWS SDKs.
+<p align="center">
+  <strong>Browse, upload and manage images on infrastructure you run.</strong><br />
+  A React console and FastAPI management API, powered by SeaweedFS S3 storage.
+</p>
 
-> **Honest status:** This is a *prototype implementation*, not a fully verified production MinIO replacement or a new independent Rust storage engine. The management API unit tests run locally. Docker image builds, full end-to-end storage tests, Kubernetes deployment, durability and security assessments must still be run in your environment **before** handling company data.
+<p align="center">
+  <a href="#quick-start">Quick start</a> ·
+  <a href="#features">Features</a> ·
+  <a href="#architecture">Architecture</a> ·
+  <a href="#use-your-s3-sdk">S3 SDK</a> ·
+  <a href="#documentation">Documentation</a>
+</p>
 
-## What exists
+---
 
-- Responsive React console: login, overview, bucket browser, nested folder navigation, drag-and-drop upload, file download, delete, image thumbnails/preview, short-lived presigned links, activity audit and status page.
-- FastAPI REST admin backend: auth with HttpOnly signed session cookie and CSRF protection, bucket/object management, SHA-256 for UI uploads, capped thumbnail transformation into WebP **without altering originals**, basic SQLite audit trail.
-- Official SeaweedFS S3 API provides object data plane, application SDK access and filesystem-backed persistence. SeaweedFS features are **not reimplemented** in Storzo.
-- Dockerfiles for backend and frontend, Docker Compose deployment (with persistent volumes), local generated secrets, simple smoke test, starter Helm chart, Kubernetes demo bootstrap script, GitHub CI workflow.
-- No mandatory external object-store bills. Your server/disk, backup, network, maintenance and power **still have costs**.
+Storzo brings bucket browsing, image previews, uploads and an audit trail into one self-hosted console. Objects live in your Docker volumes or Kubernetes PersistentVolumes, and applications connect directly to SeaweedFS using S3 SDKs. No AWS or GCS account is required.
 
-## Run locally (Docker Compose)
+> **Prototype / evaluation release.** Storzo is a management console over SeaweedFS, not an independent storage engine or a production-verified MinIO replacement. Validate compatibility, security and recovery before using company data. See [project status](#project-status).
 
-**Requirements:** Docker Engine + Docker Compose v2, Python 3.10+ to generate credentials, available Docker disk space, internet to pull base images/build Node dependencies.
+## Features
+
+| | What you can do |
+| --- | --- |
+| **Bucket & object browser** | Create buckets, navigate nested prefixes, download objects and delete files. |
+| **Image workflow** | Drag and drop uploads, view thumbnails and preview images. On-demand WebP thumbnails leave originals unchanged. |
+| **Shareable downloads** | Generate short-lived presigned links for objects. |
+| **Storage overview** | Inspect bucket usage, file-type mix and recent objects through the console. |
+| **Admin sessions & audit** | Sign in with an HttpOnly signed cookie; management writes use CSRF protection and activity is recorded in SQLite. |
+| **S3 SDK access** | Connect applications directly to the upstream SeaweedFS S3 endpoint. |
+| **Self-hosted deployment** | Start with Docker Compose; explore Kubernetes using the starter Helm chart. |
+
+SHA-256 metadata is recorded for console uploads. Overview scans are capped at 3,000 objects and marked partial when capped; they are not an authoritative disk or billing meter.
+
+## Quick start
+
+**Requirements:** Docker Engine with Docker Compose v2, Python 3.10+, available disk space and internet access to pull images and build dependencies.
 
 ```bash
-# Inside the extracted storzo directory
-python3 scripts/setup_env.py      # Creates randomized admin and S3 credentials in .env
+git clone https://github.com/imthi16/storzo.git
+cd storzo
+
+# Generate local admin and S3 credentials; preserves an existing .env.
+python3 scripts/setup_env.py
 
 docker compose up -d --build
-
 docker compose ps
-curl -f http://localhost:8088/api/health/live
-curl -f http://localhost:8088/api/health/ready
 ```
 
-Open **http://localhost:8088**. Username: `admin`. Retrieve the generated password on **your machine**:
+Open **[localhost:8088](http://localhost:8088)** and sign in as `admin`. Retrieve the generated password locally:
 
 ```bash
 grep '^ADMIN_PASSWORD=' .env
 ```
 
-The Docker Compose demo defaults to the upstream SeaweedFS `4.53_full` image tag (verified on Docker Hub, November 9, 2026); for production, validate and pin an immutable image digest. The `demo-images` bucket is automatically initialized by SeaweedFS. You can create other buckets in the console.
+The `demo-images` bucket is initialized by SeaweedFS. Create additional buckets in the console. Keep `.env` private.
 
-If startup is slow, inspect logs:
+| Service | Local address |
+| --- | --- |
+| Web console & management API | `http://localhost:8088` |
+| S3 endpoint for application SDKs | `http://localhost:8333` |
+| Liveness / readiness | `/api/health/live` / `/api/health/ready` on the console address |
+
+Both published ports bind to loopback by default. Image selection follows `SEAWEEDFS_TAG` in `.env`; review it and pin an immutable image digest for production deployments.
+
+<details>
+<summary><strong>Check health or troubleshoot startup</strong></summary>
 
 ```bash
+curl -f http://localhost:8088/api/health/live
+curl -f http://localhost:8088/api/health/ready
 docker compose logs --tail=100 storage backend frontend
 ```
 
-**Don't run `docker compose down -v` on data you care about.** `-v` deletes named persistent volumes. Normal `docker compose stop`, `up`, `restart` and `down` (without `-v`) retain them.
+The backend waits for storage connectivity; initial image builds and startup may take time.
 
-For a single-command local Docker build + S3 smoke + actual storage restart/checksum test (requires `boto3` installed on the host):
+</details>
 
-```bash
-bash scripts/demo_verify.sh
+> **Keep your data:** `docker compose down -v` deletes named persistent volumes. Use `docker compose stop` or `docker compose down` without `-v` to retain them. Persistent volumes are not a backup.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    Console["Browser console · React"] --> API["Management API · FastAPI"]
+    API --> S3["SeaweedFS · S3 gateway"]
+    API --> Audit[("SQLite audit trail")]
+    App["Your application · S3 SDK"] --> S3
+    S3 --> Data[("Object data · Docker volume / PVC")]
 ```
 
-## Access the S3 API from an existing application
+**Storzo manages the console experience. SeaweedFS stores the objects.** The FastAPI API handles console sessions, management operations, thumbnails and audit records. Application SDK traffic goes directly to SeaweedFS.
 
-The Docker Compose development S3 endpoint is `http://localhost:8333` on the host (loopback-bound by default), or `http://storage:8333` inside the Compose network. Credentials are in `.env`.
+| Layer | Technology |
+| --- | --- |
+| Console | React 19, TypeScript, Vite |
+| Management API | FastAPI, Python, SQLite |
+| Object storage | SeaweedFS S3 gateway |
+| Deployment | Docker Compose, starter Helm chart |
 
-Example for Python `boto3`:
+Read the [architecture guide](docs/ARCHITECTURE.md) for data flow and trust boundaries.
+
+## Use your S3 SDK
+
+Install `boto3` in your Python environment:
+
+```bash
+python3 -m pip install boto3
+```
+
+Use your generated `S3_ACCESS_KEY` and `S3_SECRET_KEY` from `.env` in place of the placeholders:
 
 ```python
 import boto3
 from botocore.config import Config
 
 s3 = boto3.client(
-    's3', endpoint_url='http://localhost:8333',
-    aws_access_key_id='YOUR_S3_ACCESS_KEY',
-    aws_secret_access_key='YOUR_S3_SECRET_KEY',
-    region_name='us-east-1',
-    config=Config(signature_version='s3v4', s3={'addressing_style': 'path'}),
+    "s3",
+    endpoint_url="http://localhost:8333",
+    aws_access_key_id="YOUR_S3_ACCESS_KEY",
+    aws_secret_access_key="YOUR_S3_SECRET_KEY",
+    region_name="us-east-1",
+    config=Config(
+        signature_version="s3v4",
+        s3={"addressing_style": "path"},
+    ),
 )
-s3.upload_file('example.png', 'demo-images', 'photos/example.png')
-print(s3.list_objects_v2(Bucket='demo-images'))
+
+s3.upload_file("example.png", "demo-images", "photos/example.png")
+print(s3.list_objects_v2(Bucket="demo-images"))
 ```
 
-Replace placeholders with your locally generated secrets. This is a native S3 SDK call to SeaweedFS, **not** to the FastAPI management API.
+Within the Compose network, use `http://storage:8333`. Presigned browser links must use an endpoint reachable by the browser, configured through `S3_PUBLIC_ENDPOINT`. Validate the S3 operations your application needs against SeaweedFS before migrating.
 
-## Run the automated checks
+## Development & verification
+
+Run backend tests with a fake S3 adapter; no Docker is needed:
 
 ```bash
-# FastAPI tests using a fake S3 store; no Docker required
 cd backend
 python3 -m pip install -r requirements-dev.txt
 python3 -m pytest -q
-cd ..
-
-# Full data-plane smoke test against a live Docker stack
-python3 -m pip install boto3
-python3 scripts/smoke_test.py
-
-# Restart persisted containers and verify a test image is still there
-bash scripts/verify_restart.sh
 ```
 
-To compile the React app locally:
+Build the console from the repository root:
 
 ```bash
 cd frontend
@@ -99,15 +159,44 @@ npm install
 npm run build
 ```
 
-**Test results bundled by author:** 3 backend test cases passed with a fake S3 adapter, TSX syntax parsing passed. Docker, React dependency install, real SeaweedFS smoke test and Helm installation were *not available to run in this authoring environment*, so those are still acceptance gates.
-
-## Build Docker images for Kubernetes
+Against a running local Docker stack, install `boto3` on the host and run from the repository root:
 
 ```bash
-# Replace the sample registry paths with your company-accessible container registry.
+python3 -m pip install boto3
+python3 scripts/smoke_test.py
+bash scripts/verify_restart.sh
+```
+
+For the combined Docker build, S3 smoke and restart/checksum workflow, use `bash scripts/demo_verify.sh`. These integration checks create test data and restart services; use a demo environment.
+
+CI defines backend tests, a frontend build and Compose configuration validation. Historical results and remaining acceptance gates are recorded in [build verification](docs/BUILD_VERIFICATION.md); they are not evidence of production readiness.
+
+## Project status
+
+Storzo is an **MVP for isolated evaluation**, including a possible MinIO migration assessment. Implemented source and deployment configuration still require validation in your environment.
+
+| Area | Current boundary |
+| --- | --- |
+| Identity | Single admin; enterprise auth, MFA and multi-user IAM are not included. |
+| Deployment | Single-node demo; multi-node HA and disaster recovery are not proven. |
+| Compatibility | S3 behavior is supplied by SeaweedFS; MinIO feature parity is not established. |
+| Security | TLS ingress, rate limiting, external secret management and security review remain production requirements. |
+| Recovery | A same-host cold backup/restore drill script exists; off-host recovery and RPO/RTO targets remain unproven. |
+
+Versioned-bucket deletes can create delete markers instead of reclaiming storage immediately. Self-hosting also carries server, disk, backup, network and maintenance costs.
+
+Keep existing production storage untouched during evaluation. Before cutover, verify SDK compatibility, backups and restore, bucket policies, TLS and a rollback plan. See the [feature matrix](docs/FEATURE_MATRIX.md), [migration guide](docs/MIGRATION.md) and [security checklist](docs/SECURITY_CHECKLIST.md).
+
+## Documentation
+
+<details>
+<summary><strong>Kubernetes demo setup</strong></summary>
+
+Requires `kubectl`, `helm`, a working cluster with a default StorageClass, and permission to install resources. Build and push the images to a registry your cluster can access:
+
+```bash
 docker build -t registry.example.com/team/storzo-backend:0.1.0 ./backend
 docker build -t registry.example.com/team/storzo-frontend:0.1.0 ./frontend
-
 docker push registry.example.com/team/storzo-backend:0.1.0
 docker push registry.example.com/team/storzo-frontend:0.1.0
 
@@ -116,50 +205,37 @@ export FRONTEND_IMAGE=registry.example.com/team/storzo-frontend:0.1.0
 bash scripts/k8s_demo_install.sh
 ```
 
-The Kubernetes bootstrap script creates a **new namespace** `storzo-demo`, installs the official SeaweedFS chart with demo-sized PVCs, creates a Kubernetes Secret with the generated credentials and deploys our management UI/API Helm chart.
-
-Prerequisites: `kubectl`, `helm`, a working cluster with a default StorageClass and permissions to install resources. Use a nonproduction namespace. The Helm chart's values and generated secrets are **demo-oriented** and must be reviewed before exposing externally.
-
-After installation:
+Replace the example registry paths with your own. The bootstrap creates the `storzo-demo` namespace, installs the upstream SeaweedFS chart, creates a credentials Secret and deploys the Storzo chart. Use a nonproduction environment and review demo values before installation.
 
 ```bash
 kubectl -n storzo-demo port-forward svc/storzo-storzo-frontend 8088:80
-# New terminal: for signed S3 links in the browser
+# In a second terminal, for browser-accessible presigned links:
 kubectl -n storzo-demo port-forward svc/seaweedfs-s3 8333:8333
 ```
 
-Open `http://localhost:8088` and sign in. **Never** copy production MinIO data into the demo until backup/restore and policy checks pass. For production replace port-forward with TLS ingress, external secret management and a properly sized, redundant SeaweedFS deployment. The backend uses one SQLite audit writer and is set to one replica.
+Open `http://localhost:8088`. Production deployment needs TLS ingress, external secret management and a properly sized, redundant storage deployment. The SQLite audit backend uses one replica.
 
-## Feature scope and important limitations
+</details>
 
-| Domain | MVP implementation | Not yet production-ready / not included |
-| --- | --- | --- |
-| S3 data plane | SeaweedFS S3 gateway with authenticated SDK access | Feature-by-feature compatibility against existing MinIO SDK usages needs validation |
-| Storage | Persisted Docker volume; Kubernetes PVC example | Multi-node HA, disaster recovery, proven automatic repair for company workload |
-| Admin web app | Login, bucket/objects CRUD, uploads, previews, audit | Full multi-user IAM, retention UI, lifecycle UI, unlimited object analytics |
-| Image features | On-demand WebP thumbnail preview, SHA-256 metadata on UI uploads | Automatic tiering, storage deduplication, production image transformation queue |
-| Security | Randomized secrets, signed HttpOnly cookie, CSRF checks, loopback ports by default | TLS ingress setup, rate limiting, enterprise auth, external vulnerability assessment |
-| Operations | Health checks, Compose, Helm example, CI definitions | Real load/chaos testing, verified backup/restore runbook, SLO evidence |
-
-The dashboard scans at most 3,000 objects; it labels results as partial when capped. It is not an authoritative disk/billing meter. Deleting objects in versioned buckets may create delete markers rather than immediately reclaim space. Underlying provider feature support must be tested.
-
-## Read these before the office demonstration
-
-- [`docs/TL_DEMO.md`](docs/TL_DEMO.md): five-minute demonstration and acceptance script.
-- [`docs/FEATURE_MATRIX.md`](docs/FEATURE_MATRIX.md): implemented vs delegated vs future features.
-- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md): storage/data/control plane and trust boundaries.
-- [`docs/MIGRATION.md`](docs/MIGRATION.md): staged MinIO migration (do not cut over without validation).
-- [`docs/SECURITY_CHECKLIST.md`](docs/SECURITY_CHECKLIST.md): production blocking requirements.
-- [`docs/BUILD_PLAN.md`](docs/BUILD_PLAN.md): Claude Code / Codex / Muse Code ownership and prompts.
-
-## License and attribution
-
-SeaweedFS is an independent upstream project; see its upstream repository for its license and notices. Storzo is a new demonstration/control-plane codebase and is **not** affiliated with MinIO, RustFS, or SeaweedFS. Before publishing the Storzo repository, choose and record a license and preserve required third-party notices. This archive does not imply that any third-party code has been relicensed.
-
-## Safe migration posture
-
-Keep the existing MinIO installation untouched. Test with synthetic images first. Even after this demo works, obtain a staging compatibility matrix, full backups, restore drill, bucket permissions review, cutover/rollback plan, and TL approval before production migration.
+| Guide | Start here for |
+| --- | --- |
+| [Demo walkthrough](docs/TL_DEMO.md) | A five-minute demonstration and acceptance script |
+| [Architecture](docs/ARCHITECTURE.md) | Storage, management plane and trust boundaries |
+| [Feature matrix](docs/FEATURE_MATRIX.md) | Implemented, upstream-provided and planned capabilities |
+| [Deployment configuration](deploy/) | Starter Helm chart and SeaweedFS demo values |
+| [Migration](docs/MIGRATION.md) | Staged MinIO evaluation and cutover requirements |
+| [Security checklist](docs/SECURITY_CHECKLIST.md) | Requirements before production exposure |
+| [Build verification](docs/BUILD_VERIFICATION.md) | Recorded checks and outstanding validation |
+| [Release status](docs/RELEASE_STATUS.md) | Dated MVP release notes and demo checklist |
 
 ## Contributing
 
-Use separate feature branches for Claude Code (backend), Meta Muse Code (frontend) and Codex (independent testing/review); merge to `main` only when tests pass. Do not commit secrets, `.env`, office data, or customer files.
+Use a focused feature branch and include relevant validation with your pull request. Run backend tests or the frontend build for changes to those components. Never commit `.env`, credentials, company data or customer files.
+
+[Report an issue](https://github.com/imthi16/storzo/issues) · [Open a pull request](https://github.com/imthi16/storzo/pulls)
+
+## License & attribution
+
+Storzo is licensed under the **[MIT License](LICENSE)**.
+
+[SeaweedFS](https://github.com/seaweedfs/seaweedfs) is an independent upstream project with its own license and notices. Storzo is not affiliated with SeaweedFS, MinIO or RustFS; Storzo's license does not relicense third-party software.
