@@ -23,7 +23,7 @@ def session_payload(session: str | None) -> dict:
     try:
         data = signed_serializer().loads(session, max_age=config.SESSION_TTL)
     except (BadSignature, SignatureExpired):
-        raise HTTPException(401, 'Session expired')
+        raise HTTPException(401, 'Session expired') from None
     if data.get('user') != config.ADMIN_USER or not data.get('csrf'):
         raise HTTPException(401, 'Invalid session')
     return data

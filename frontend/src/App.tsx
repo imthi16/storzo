@@ -128,7 +128,8 @@ export function App() {
   const goPrevObjects = () => {
     if (pager.index === 0 || !selected) return;
     const token = pager.tokens[pager.index - 1];
-    navigate(token, () => setPager(old => ({index: old.index - 1, tokens: old.tokens})));
+    if (token === undefined) return;
+    navigate(token,() => setPager(old => ({index: old.index - 1, tokens: old.tokens})));
   };
   const changePageSize = (n: number) => { setPageSize(n); setActivityOffset(0); setBarPage(0); try { localStorage.setItem('storzo.pageSize', String(n)); } catch { /* optional */ } };
   const refresh = async () => {
@@ -335,7 +336,7 @@ export function App() {
         <button className={page==='activity'||page==='activity-detail'?'nav active':'nav'} onClick={()=>nav('activity')}><Activity size={19}/>Activity log</button>
         <button className={page==='settings'?'nav active':'nav'} onClick={()=>nav('settings')}><Settings size={19}/>Settings</button>
       </nav>
-      <div className="side-bottom"><div className="infra-tag"><span className={`pulse ${ready}`}/>{ready==='online'?'Storage connected':ready==='offline'?'Storage unavailable':'Checking storage'}</div><div className="side-user"><div className="avatar">{session.username[0].toUpperCase()}</div><div><strong>{session.username}</strong><small>Administrator</small></div><button onClick={logout} title="Sign out" aria-label="Sign out" className="icon-btn"><LogOut size={17}/></button></div></div>
+      <div className="side-bottom"><div className="infra-tag"><span className={`pulse ${ready}`}/>{ready==='online'?'Storage connected':ready==='offline'?'Storage unavailable':'Checking storage'}</div><div className="side-user"><div className="avatar">{session.username.charAt(0).toUpperCase()}</div><div><strong>{session.username}</strong><small>Administrator</small></div><button onClick={logout} title="Sign out" aria-label="Sign out" className="icon-btn"><LogOut size={17}/></button></div></div>
     </aside>
     <main className="content">
       <header className="topbar"><button className="mobile-toggle icon-btn" aria-label="Toggle navigation menu" onClick={()=>setMenuOpen(!menuOpen)}><Menu/></button><nav className="breadcrumbs" aria-label="Breadcrumb"><button className="crumb crumb-root" onClick={()=>nav('dashboard')}>Workspace</button><ChevronRight size={15} className="crumb-root"/>{page==='activity-detail'?<><button className="crumb" onClick={()=>nav('activity')}>Activity log</button><ChevronRight size={15}/><strong aria-current="page">Event #{activityId}</strong></>:<strong aria-current="page">{page==='dashboard'?'Overview':page==='buckets'?'Buckets & objects':page==='activity'?'Activity log':'Settings'}</strong>}</nav><div className="top-actions"><button className="secondary compact" onClick={refresh} disabled={busy}><RefreshCw size={16} className={busy?'spin':''}/> Refresh</button></div></header>

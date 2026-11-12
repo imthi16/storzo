@@ -5,7 +5,7 @@ import { bytes, when } from '../lib/format';
 export function ActivityDetail({entry, error, onBack, onOpenLocation}: {entry: Audit | null; error: string; onBack: () => void; onOpenLocation: (bucket: string, key: string | null) => void}) {
   if (error) return <section className="panel"><div className="empty"><Activity size={25}/><strong>Cannot show this event</strong><p>{error}</p><button className="secondary compact" onClick={onBack}><ArrowLeft size={15}/> Back to activity</button></div></section>;
   if (!entry) return <section className="panel" aria-label="Loading event"><div className="skel skel-line"/><div className="skel skel-line short"/><div className="skel skel-line"/></section>;
-  const facts = (entry.detail || '').split(';').map(x => x.trim()).filter(Boolean).map(x => { const i = x.indexOf('='); return i < 0 ? ['note', x] : [x.slice(0, i), x.slice(i + 1)]; });
+  const facts = (entry.detail || '').split(';').map(x => x.trim()).filter(Boolean).map((x): [string, string] => { const i = x.indexOf('='); return i < 0 ? ['note', x] : [x.slice(0, i), x.slice(i + 1)]; });
   const label = (k: string, v: string) => k === 'bytes' && /^\d+$/.test(v) ? `${bytes(Number(v))} (${Number(v).toLocaleString()} bytes)` : v;
   return <>
     <section className="panel detail-panel">

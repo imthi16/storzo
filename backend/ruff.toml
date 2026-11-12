@@ -1,0 +1,15 @@
+target-version = "py312"
+line-length = 120
+
+[lint]
+select = ["E", "F", "I", "B", "UP", "BLE", "RUF"]
+# The codebase uses long single-line statements; formatting is not enforced here.
+ignore = ["E501"]
+
+[lint.per-file-ignores]
+# tests set env vars before importing `app` (E402) and use compact one-line statements.
+"tests/*" = ["E402", "E701", "E702"]
+
+[lint.flake8-bugbear]
+# FastAPI dependency markers are meant to be used as argument defaults.
+extend-immutable-calls = ["fastapi.Depends", "fastapi.File", "fastapi.Form", "fastapi.Query"]

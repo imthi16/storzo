@@ -25,8 +25,10 @@ def collect_dashboard() -> dict:
     buckets_ = s3.s3_client().list_buckets().get('Buckets', [])
     total, bytes_, images, scanned, capped = 0, 0, 0, 0, False
     bucket_rows = [{'name': bucket['Name'], 'object_count': 0, 'total_bytes': 0} for bucket in buckets_]
-    types, largest, recent = {}, [], []
-    for bucket, summary in zip(buckets_, bucket_rows):
+    types: dict[str, dict] = {}
+    largest: list[dict] = []
+    recent: list[tuple[float, dict]] = []
+    for bucket, summary in zip(buckets_, bucket_rows, strict=True):
         token = None
         while scanned < limit:
             args = {'Bucket': bucket['Name'], 'MaxKeys': min(500, limit - scanned)}

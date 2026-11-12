@@ -1,6 +1,6 @@
 import io
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from PIL import Image
 
@@ -11,6 +11,7 @@ os.environ.setdefault('S3_SECRET_KEY', 'testingsecret')
 os.environ.setdefault('AUDIT_DB_PATH', '/tmp/storzo-test-audit.db')
 
 from fastapi.testclient import TestClient
+
 from app import config, main, s3, security
 
 
@@ -26,7 +27,7 @@ class FakeS3:
         self.modified = {}
 
     def list_buckets(self):
-        return {'Buckets': [{'Name': name, 'CreationDate': datetime.now(timezone.utc)} for name in self.buckets]}
+        return {'Buckets': [{'Name': name, 'CreationDate': datetime.now(UTC)} for name in self.buckets]}
 
     def create_bucket(self, Bucket):
         self.buckets[Bucket] = {}
@@ -47,7 +48,7 @@ class FakeS3:
                 folders.add(Prefix + remaining.split('/')[0] + '/')
             else:
                 contents.append({'Key': key, 'Size': len(value[0]),
-                                 'LastModified': self.modified.get((Bucket, key), datetime.now(timezone.utc)),
+                                 'LastModified': self.modified.get((Bucket, key), datetime.now(UTC)),
                                  'ETag': '"abc"'})
         offset = int(ContinuationToken or 0)
         result = {'Contents': contents[offset:offset + MaxKeys],
@@ -86,7 +87,7 @@ def login(c):
 
 
 def test_auth_and_csrf(monkeypatch, tmp_path):
-    c, fake = setup_client(monkeypatch, tmp_path)
+    c, _fake = setup_client(monkeypatch, tmp_path)
     try:
         assert c.get('/api/buckets').status_code == 401
         assert c.post('/api/auth/login', json={'username':'admin','password':'wrong'}).status_code == 401
@@ -334,7 +335,7 @@ def test_dashboard_insight_shapes_sorting_and_existing_fields(monkeypatch, tmp_p
         expected_objects = []
         for index, (key, size) in enumerate(samples):
             bucket = 'small-bucket' if index < 3 else 'large-bucket'
-            modified = datetime(2026, 1, index + 1, tzinfo=timezone.utc)
+            modified = datetime(2026, 1, index + 1, tzinfo=UTC)
             fake.buckets[bucket][key] = (b'x' * size, 'application/octet-stream')
             fake.modified[bucket, key] = modified
             expected_objects.append({'bucket': bucket, 'key': key, 'size': size,
@@ -480,7 +481,7 @@ def test_delete_bucket_refuses_non_empty_even_if_backend_would_allow_it(monkeypa
         fake.buckets['demo-images']['a.txt'] = (b'x', {})
         r = c.delete('/api/buckets/demo-images', headers={'X-CSRF-Token': csrf})
         assert r.status_code == 409, r.text
-        assert 'demo-images' in fake.buckets and fake.buckets['demo-images']
+        assert fake.buckets.get('demo-images')
         fake.buckets['demo-images'].clear()
         assert c.delete('/api/buckets/demo-images', headers={'X-CSRF-Token': csrf}).status_code == 200
         assert 'demo-images' not in fake.buckets
