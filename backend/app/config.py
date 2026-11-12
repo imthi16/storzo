@@ -11,6 +11,7 @@ S3_SECRET_KEY = os.getenv('S3_SECRET_KEY', '')
 ADMIN_USER = os.getenv('ADMIN_USER', 'admin')
 ADMIN_PASSWORD = os.getenv('ADMIN_PASSWORD', '')
 SESSION_SECRET = os.getenv('SESSION_SECRET', '')
+CRED_SIGNING_KEY = os.getenv('CRED_SIGNING_KEY', '')
 COOKIE_SECURE = os.getenv('COOKIE_SECURE', 'false').lower() == 'true'
 DB_PATH = Path(os.getenv('AUDIT_DB_PATH', '/tmp/storzo-audit.db'))
 MAX_UPLOAD_MB = min(500, max(1, int(os.getenv('MAX_UPLOAD_MB', '50'))))
