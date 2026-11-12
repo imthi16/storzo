@@ -18,6 +18,7 @@ data = {
     'ADMIN_USER': 'admin',
     'ADMIN_PASSWORD': key(30),
     'SESSION_SECRET': secrets.token_urlsafe(48),
+    'CRED_SIGNING_KEY': secrets.token_urlsafe(48),
     'S3_ACCESS_KEY': key(24),
     'S3_SECRET_KEY': key(48),
     'WEED_ADMIN_PASSWORD': key(30),

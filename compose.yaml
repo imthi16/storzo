@@ -30,6 +30,7 @@ services:
       ADMIN_USER: ${ADMIN_USER:-admin}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD}
       SESSION_SECRET: ${SESSION_SECRET}
+      CRED_SIGNING_KEY: ${CRED_SIGNING_KEY:-}
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
       MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-50}
       AUDIT_DB_PATH: /app/state/audit.db

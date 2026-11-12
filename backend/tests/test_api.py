@@ -32,6 +32,11 @@ class FakeS3:
     def create_bucket(self, Bucket):
         self.buckets[Bucket] = {}
 
+    def head_bucket(self, Bucket):
+        if Bucket not in self.buckets:
+            from botocore.exceptions import ClientError
+            raise ClientError({'Error': {'Code': '404'}}, 'HeadBucket')
+
     def delete_bucket(self, Bucket):
         if self.buckets[Bucket]:
             from botocore.exceptions import ClientError

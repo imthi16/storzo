@@ -7,11 +7,11 @@ from fastapi import FastAPI
 
 from app import config
 from app.db import init_db
-from app.routers import audit, auth, buckets, dashboard, health, objects
+from app.routers import audit, auth, buckets, credentials, dashboard, health, objects
 from app.security import signed_serializer
 
 app = FastAPI(title=config.APP_NAME + ' Management API', version='0.1.0', docs_url=None, redoc_url=None)
-for module in (health, auth, buckets, objects, audit, dashboard):
+for module in (health, auth, buckets, objects, audit, dashboard, credentials):
     app.include_router(module.router)
 
 
