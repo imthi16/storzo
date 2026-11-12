@@ -89,8 +89,8 @@ def thumbnail(bucket: str, key: str, width: int = Query(256, ge=32, le=1024),
             stream.seek(0)
             return Response(content=stream.getvalue(), media_type='image/webp',
                             headers={'Cache-Control': 'private, max-age=120', 'X-Content-Type-Options': 'nosniff'})
-    except (UnidentifiedImageError, OSError, Image.DecompressionBombError, Image.DecompressionBombWarning):
-        raise HTTPException(415, 'Invalid or unsafe image')
+    except (UnidentifiedImageError, OSError, Image.DecompressionBombError, Image.DecompressionBombWarning) as exc:
+        raise HTTPException(415, 'Invalid or unsafe image') from exc
 
 
 @router.post('/upload', status_code=201)

@@ -15,5 +15,5 @@ def ready():
     try:
         s3.s3_client().list_buckets()
         return {'status': 'ready', 'storage': 'reachable'}
-    except Exception:
-        raise HTTPException(503, 'Storage not reachable')
+    except Exception as exc:  # any storage failure means "not ready"; the cause is chained, not leaked
+        raise HTTPException(503, 'Storage not reachable') from exc

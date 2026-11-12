@@ -13,9 +13,14 @@ Storzo is a self-hosted S3 image-storage console: a React UI plus a FastAPI **ma
 cd backend && python3 -m pip install -r requirements-dev.txt
 python3 -m pytest -q                                  # all
 python3 -m pytest -q tests/test_api.py -k <name>      # single test
+python3 -m pytest -q --cov=app --cov-fail-under=85    # what CI runs
+python3 -m ruff check app tests && python3 -m mypy app   # lint + types (CI gates)
+# requirements.lock is the hash-pinned runtime set the Docker image installs. After editing
+# requirements.txt: uv pip compile requirements.txt --python-version 3.12 --generate-hashes -o requirements.lock
 
-# Frontend (type-check + build; there is no test or lint script)
-cd frontend && npm install && npm run build
+# Frontend (CI runs lint, unit tests and the build)
+cd frontend && npm ci
+npm run lint && npm test && npm run build             # eslint, vitest (src/**/*.test.ts), tsc -b + vite build
 npm run dev                                           # vite dev server
 
 # Full stack

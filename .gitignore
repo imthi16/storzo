@@ -10,6 +10,8 @@ secrets/
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.coverage
+.mypy_cache/
 .venv/
 venv/
 # Node

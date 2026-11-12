@@ -40,7 +40,7 @@ export function OverviewPage({stats, updatedAgo, uploadDays, ready, barPage, set
                   <span className="bar-track"><span className="bar-fill" style={{width: `${Math.max(2, Math.round(b.total_bytes / max * 100))}%`}} /></span>
                 </button></li>);
               })()}</ul>}
-            {stats.buckets && stats.buckets.length > PAGE_SIZES[0] && <Pager pageNumber={barPage+1} pageSize={pageSize} onSize={changePageSize} hasPrev={barPage>0} hasNext={(barPage+1)*pageSize<stats.buckets.length} onPrev={()=>setBarPage(barPage-1)} onNext={()=>setBarPage(barPage+1)} summary={`Showing ${barPage*pageSize+1}-${Math.min((barPage+1)*pageSize, stats.buckets.length)} of ${stats.buckets.length}`} />}
+            {stats.buckets && stats.buckets.length > (PAGE_SIZES[0] ?? 0) && <Pager pageNumber={barPage+1} pageSize={pageSize} onSize={changePageSize} hasPrev={barPage>0} hasNext={(barPage+1)*pageSize<stats.buckets.length} onPrev={()=>setBarPage(barPage-1)} onNext={()=>setBarPage(barPage+1)} summary={`Showing ${barPage*pageSize+1}-${Math.min((barPage+1)*pageSize, stats.buckets.length)} of ${stats.buckets.length}`} />}
           </section>
           <section className="panel"><div className="panel-title"><h2>File types</h2><Image size={19}/></div>
             {!stats.by_type ? <div className="empty slim"><FileIcon size={24}/><p>File-type breakdown will appear here once the backend reports it.</p></div>

@@ -4,7 +4,7 @@ import { plural } from '../lib/format';
 export function UploadSpark({days}: {days: {label: string; count: number}[]}) {
   const max = Math.max(1, ...days.map(d => d.count));
   const total = days.reduce((a, d) => a + d.count, 0);
-  const peak = days.reduce((a, d) => (d.count > a.count ? d : a), days[0]);
+  const peak = days.reduce<(typeof days)[number] | undefined>((a, d) => (!a || d.count > a.count ? d : a), undefined);
   return <div>
     <div className="spark-wrap"><span className="spark-max" aria-hidden="true">{max}</span><div className="spark" role="img" aria-label={`Upload activity: ${plural(total, 'upload')} in the last 14 days${peak && peak.count > 0 ? `, most on ${peak.label}` : ''}.`}>
       {days.map(d => <div key={d.label} className="spark-bar" title={`${d.label}: ${plural(d.count, 'upload')}`}
