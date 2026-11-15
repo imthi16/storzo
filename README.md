@@ -240,7 +240,7 @@ Against a running stack, `python3 scripts/gateway_e2e.py` checks the agent-gatew
 
 For the combined Docker build, S3 smoke and restart/checksum workflow, use `bash scripts/demo_verify.sh`. These integration checks create test data and restart services; use a demo environment.
 
-CI runs `ruff`, `mypy` and `pytest` (85% coverage floor) with `pip-audit` for the backend; lint, tests, build and `npm audit` for the frontend; an image build of backend, frontend and gateway with a Trivy scan; Helm lint; Compose validation; and gofmt, `go vet` and race tests for the gateway. Historical results and remaining acceptance gates are recorded in [build verification](docs/BUILD_VERIFICATION.md); they are not evidence of production readiness.
+CI runs `ruff`, `mypy` and `pytest` (85% coverage floor) with `pip-audit` for the backend; lint, tests, build and `npm audit` for the frontend; an image build of backend, frontend and gateway with a Trivy scan; Helm lint; Compose validation; gofmt, `go vet` and race tests for the gateway; and an end-to-end job that starts the Compose stack and runs the gateway acceptance script and the Playwright specs. Historical results and remaining acceptance gates are recorded in [build verification](docs/BUILD_VERIFICATION.md); they are not evidence of production readiness.
 
 ## Project status
 

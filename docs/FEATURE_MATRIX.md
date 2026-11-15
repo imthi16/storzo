@@ -39,7 +39,7 @@ Status meanings: **Implemented** = source code exists, subject to end-to-end val
 | Ops | Secrets generator | Implemented | Random generated secret; local .env only |
 | Ops | Backend unit tests | Implemented and passed | Fake-S3 suite; CI also runs ruff, mypy and an 85% coverage floor |
 | Ops | Gateway Go tests | Implemented | CI runs gofmt, vet and race tests; gateway image is built and Trivy-scanned in CI |
-| Ops | Gateway e2e acceptance script | Implemented | `scripts/gateway_e2e.py` against a live stack: 35 checks including a ledger that requires one audit row per request. Run by hand, not in CI |
+| Ops | Gateway e2e acceptance script | Implemented | `scripts/gateway_e2e.py` against a live stack: 35 checks including a ledger that requires one audit row per request. Runs in CI (`e2e` job) before the Playwright suite |
 | Ops | Real S3 integrity smoke script | Implemented as script | Run only against live stack |
 | Ops | Verified restart persistence | Manual validation required | Do not mark complete based on PVC configuration alone |
 | Ops | TLS / enterprise auth / MFA | Planned | Must be implemented before internet exposure |
