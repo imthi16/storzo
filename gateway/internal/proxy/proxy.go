@@ -173,13 +173,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		r.Body = &countingBody{ReadCloser: r.Body, bytes: &requestBytes}
 	}
 	bucket, key, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, "/"), "/")
-	auth := r.Header.Get("Authorization")
-	_, auth, _ = strings.Cut(auth, "Credential=")
-	kid, _, _ := strings.Cut(auth, "/")
-	if kid == "" {
-		kid, _, _ = strings.Cut(r.URL.Query().Get("X-Amz-Credential"), "/")
-	}
-	event := Event{Kid: kid, Method: r.Method, Bucket: bucket, Key: key, Decision: "deny"}
+	event := Event{Method: r.Method, Bucket: bucket, Key: key, Decision: "deny"}
 	defer func() {
 		event.Status, event.Bytes = rw.status, requestBytes.Load()+rw.bytes
 		if event.Status == 0 {
@@ -206,7 +200,21 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	event.Kid, event.Decision = claims.Kid, "allow"
+	if !claims.Master {
+		for name := range r.Header {
+			lower := strings.ToLower(name)
+			if strings.HasPrefix(lower, "x-amz-") && !allowedScopedHeader(lower) {
+				delete(r.Header, name)
+			}
+		}
+	}
 	h.upstream.ServeHTTP(rw, r)
+}
+
+// Only these S3 controls may be promoted from scoped requests to master signing.
+func allowedScopedHeader(name string) bool {
+	return strings.HasPrefix(name, "x-amz-meta-") || strings.HasPrefix(name, "x-amz-checksum-") ||
+		name == "x-amz-sdk-checksum-algorithm" || name == "x-amz-content-sha256" || name == "x-amz-date"
 }
 
 type countingBody struct {
