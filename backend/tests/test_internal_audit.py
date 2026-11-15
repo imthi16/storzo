@@ -1,12 +1,15 @@
+import asyncio
 import hashlib
 import hmac
 import json
 import time
 
 import pytest
+from fastapi import HTTPException, Request
 from test_api import setup_client
 
 from app import config, db
+from app.routers.internal import ingest_audit
 
 KEY = 'k' * 40
 
@@ -183,3 +186,116 @@ def test_field_over_limit_is_422(client, field, value):
     response = client.post('/api/internal/audit', content=body, headers=_sign(body))
     assert response.status_code == 422
     assert _gateway_rows() == []
+
+
+
+@pytest.mark.parametrize('signature', [b'\xff', b'\xff' * 64, b'', b'0' * 63, b'0' * 65, b'A' * 64, b'g' * 64])
+def test_invalid_signature_header_is_401(client, signature):
+    # protects=non-ASCII, wrong-length and non-lowercase-hex signatures return 401;
+    # fails_when=invalid headers raise an exception, return another status, or write rows;
+    # no_claim=a well-formed signature authenticates the body.
+    body = _body([_event()])
+    headers = {key.encode(): value.encode() for key, value in _sign(body).items()}
+    headers[b'x-storzo-signature'] = signature
+    response = client.post('/api/internal/audit', content=body, headers=headers)
+    assert response.status_code == 401
+    assert _gateway_rows() == []
+
+
+def _stream_request(headers, chunks):
+    consumed = []
+
+    async def stream():
+        for chunk in chunks:
+            consumed.append(len(chunk))
+            yield chunk
+
+    iterator = stream()
+
+    async def receive():
+        try:
+            chunk = await anext(iterator)
+        except StopAsyncIteration:
+            return {'type': 'http.request', 'body': b'', 'more_body': False}
+        return {'type': 'http.request', 'body': chunk, 'more_body': True}
+
+    scope = {
+        'type': 'http', 'method': 'POST', 'path': '/api/internal/audit',
+        'headers': [(key.encode(), value.encode()) for key, value in headers.items()],
+    }
+    return Request(scope, receive), consumed
+
+
+@pytest.mark.parametrize('declared_length', [None, str(8 * 1024 * 1024)])
+@pytest.mark.parametrize('failure,status', [('key', 503), ('timestamp', 401), ('signature', 401)])
+def test_header_rejection_does_not_consume_body(client, monkeypatch, declared_length, failure, status):
+    # protects=configuration and invalid auth headers reject an 8 MiB upload without reading any chunk;
+    # fails_when=body chunks are consumed or Content-Length rejection precedes header authentication;
+    # no_claim=an incorrect but well-formed HMAC can be checked without reading its message.
+    headers = _sign(b'')
+    if failure == 'key':
+        monkeypatch.setattr(config, 'CRED_SIGNING_KEY', '')
+    elif failure == 'timestamp':
+        headers['x-storzo-timestamp'] = '0'
+    else:
+        headers['x-storzo-signature'] = 'bad-signature'
+    if declared_length is not None:
+        headers['content-length'] = declared_length
+    request, consumed = _stream_request(headers, [b'x' * 65536] * 128)
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(ingest_audit(request))
+    assert exc.value.status_code == status
+    assert consumed == []
+    assert _gateway_rows() == []
+
+
+@pytest.mark.parametrize('declare_length', [True, False])
+def test_signed_oversized_body_is_413(client, declare_length):
+    # protects=the 4 MiB cap rejects correctly signed oversized bodies before parsing or writing;
+    # fails_when=a declared oversized body is read, a stream is fully consumed, or a row is written;
+    # no_claim=ASGI servers allocate bounded individual receive chunks.
+    cap = 4 * 1024 * 1024
+    chunk = b'x' * 65536
+    body = chunk * 128
+    headers = _sign(body)
+    if declare_length:
+        headers['content-length'] = str(len(body))
+    request, consumed = _stream_request(headers, [chunk] * 128)
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(ingest_audit(request))
+    assert exc.value.status_code == 413
+    assert len(consumed) == (0 if declare_length else cap // len(chunk) + 1)
+    assert _gateway_rows() == []
+
+
+def test_exact_body_cap_is_accepted(client):
+    # protects=a valid signed body exactly at 4 MiB remains accepted;
+    # fails_when=the size boundary is exclusive or streaming changes the authenticated bytes;
+    # no_claim=oversized batches or oversized event fields are accepted.
+    cap = 4 * 1024 * 1024
+    body = _body([_event()])
+    body += b' ' * (cap - len(body))
+    response = client.post('/api/internal/audit', content=body, headers=_sign(body))
+    assert response.status_code == 200, response.text
+    assert response.json() == {'accepted': 1}
+    assert len(_gateway_rows()) == 1
+
+
+def test_maximum_field_batch_is_accepted(client):
+    # protects=500 events with maximum-length fields and UTF-8 Unicode fit the byte cap and persist;
+    # fails_when=a permitted full batch returns 413/422 or loses rows;
+    # no_claim=unbounded integer lengths or arbitrary ignored JSON fields fit under the cap.
+    event = {
+        'kid': '\U0001f600' * 64, 'method': '\U0001f600' * 16,
+        'bucket': '\U0001f600' * 63, 'key': '\U0001f600' * 1024,
+        'status': 599, 'bytes': 2**63 - 1, 'decision': '\U0001f600' * 16,
+    }
+    # Raw UTF-8 matches the gateway's JSON representation.
+    body = json.dumps({'events': [event] * 500}, ensure_ascii=False).encode()
+    assert len(body) <= 4 * 1024 * 1024
+    response = client.post('/api/internal/audit', content=body, headers=_sign(body))
+    assert response.status_code == 200, response.text
+    assert response.json() == {'accepted': 500}
+    rows = _gateway_rows()
+    assert len(rows) == 500
+    assert all(row['bucket'] == event['bucket'] and row['object_key'] == event['key'] for row in rows)
