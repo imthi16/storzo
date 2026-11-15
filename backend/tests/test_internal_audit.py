@@ -45,8 +45,8 @@ def test_valid_signature_writes_rows(client):
     assert len(rows) == 2
     details = {row['detail'] for row in rows}
     assert details == {
-        'kid=STZ0 decision=allow status=200',
-        'kid=STZ1 decision=allow status=200',
+        'method=GET bytes=12 kid=STZ0 decision=allow status=200',
+        'method=GET bytes=12 kid=STZ1 decision=allow status=200',
     }
     assert {(row['bucket'], row['object_key']) for row in rows} == {
         ('demo-images', 'run-42/0.txt'),
@@ -79,6 +79,31 @@ def test_too_many_events_is_422(client):
     response = client.post('/api/internal/audit', content=body, headers=_sign(body))
     assert response.status_code == 422
     assert _gateway_rows() == []
+
+
+@pytest.mark.parametrize('signing_key', ['', 'x' * 31])
+def test_unset_or_short_key_returns_503(monkeypatch, tmp_path, signing_key):
+    """protects=unset or short CRED_SIGNING_KEY returns 503 and writes nothing; fails_when=a signature computed from that key is accepted or a row is stored."""
+    monkeypatch.setattr(config, 'CRED_SIGNING_KEY', signing_key)
+    c, _fake = setup_client(monkeypatch, tmp_path)
+    body = _body([_event()])
+    response = c.post('/api/internal/audit', content=body, headers=_sign(body, signing_key))
+    assert response.status_code == 503
+    assert _gateway_rows() == []
+
+
+def test_stored_row_contains_method_and_bytes(client):
+    """protects=stored detail keeps method and bytes; fails_when=GET and PUT of the same object look identical."""
+    body = _body([
+        {**_event(0), 'method': 'GET', 'bytes': 12},
+        {**_event(0), 'method': 'PUT', 'bytes': 4096},
+    ])
+    response = client.post('/api/internal/audit', content=body, headers=_sign(body))
+    assert response.status_code == 200, response.text
+    assert {row['detail'] for row in _gateway_rows()} == {
+        'method=GET bytes=12 kid=STZ0 decision=allow status=200',
+        'method=PUT bytes=4096 kid=STZ0 decision=allow status=200',
+    }
 
 
 def test_route_works_without_session_cookie(client):
