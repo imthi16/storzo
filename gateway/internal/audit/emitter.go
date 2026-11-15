@@ -62,7 +62,8 @@ type Config struct {
 	BatchSize int
 	// FlushInterval is the longest an event waits before a flush. Default 1s.
 	FlushInterval time.Duration
-	// RetryBackoff is the pause before the single retry. Default 100ms.
+	// RetryBackoff sets the first retry delay (default 100ms).
+	// The next delays are 5x and 20x: by default 500ms and 2s.
 	RetryBackoff time.Duration
 	// Client is optional. Tests inject one; nil uses a client with a 5s timeout.
 	Client *http.Client
@@ -87,6 +88,7 @@ type Emitter struct {
 	done   chan struct{}
 
 	dropped atomic.Uint64
+	failed  atomic.Uint64
 }
 
 // New starts the flush loop. The caller must Close the emitter.
@@ -161,8 +163,18 @@ func (e *Emitter) Dropped() uint64 {
 	return e.dropped.Load()
 }
 
+// Failed reports events abandoned after send failures or a shutdown deadline.
+// Queue-full drops are counted separately by Dropped.
+func (e *Emitter) Failed() uint64 {
+	if e == nil {
+		return 0
+	}
+	return e.failed.Load()
+}
+
 // Close stops Emit and flushes events already queued. It returns when the
-// flush finishes or when ctx ends, whichever is first.
+// flush finishes or when ctx ends, whichever is first. The base context stays
+// alive during draining; only an ended caller context interrupts pending sends.
 func (e *Emitter) Close(ctx context.Context) error {
 	if e == nil {
 		return nil
@@ -236,6 +248,7 @@ func (e *Emitter) loop() {
 			return
 		case <-e.base.Done():
 			disarm()
+			e.failed.Add(uint64(len(drain(e.queue, batch))))
 			return
 		}
 	}
@@ -255,6 +268,7 @@ func drain(ch <-chan Event, batch []Event) []Event {
 func (e *Emitter) flush(events []Event) {
 	for len(events) > 0 {
 		if e.base.Err() != nil {
+			e.failed.Add(uint64(len(events)))
 			return
 		}
 		n := min(len(events), e.batchSize)
@@ -271,22 +285,36 @@ func (e *Emitter) send(events []Event) {
 	if len(events) == 0 {
 		return
 	}
+	delivered := false
+	defer func() {
+		if !delivered {
+			e.failed.Add(uint64(len(events)))
+		}
+	}()
 	body, err := json.Marshal(batchBody{Events: events})
 	if err != nil {
 		return
 	}
-	err = e.post(body)
-	if err == nil || !e.retryable(err) {
-		return
+	delays := [...]time.Duration{e.backoff, 5 * e.backoff, 20 * e.backoff}
+	for attempt := 0; attempt < 4; attempt++ {
+		if attempt > 0 {
+			timer := time.NewTimer(delays[attempt-1])
+			select {
+			case <-timer.C:
+			case <-e.base.Done():
+				timer.Stop()
+				return
+			}
+		}
+		err = e.post(body)
+		if err == nil {
+			delivered = true
+			return
+		}
+		if !e.retryable(err) {
+			return
+		}
 	}
-	timer := time.NewTimer(e.backoff)
-	select {
-	case <-timer.C:
-	case <-e.base.Done():
-		timer.Stop()
-		return
-	}
-	_ = e.post(body)
 }
 
 func (e *Emitter) post(body []byte) error {
@@ -366,7 +394,7 @@ func (e *Emitter) retryable(err error) bool {
 	}
 	var status statusError
 	if errors.As(err, &status) {
-		return status >= 500
+		return status == http.StatusTooManyRequests || status >= 500
 	}
 	return true
 }
