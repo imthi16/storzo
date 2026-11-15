@@ -21,9 +21,11 @@ from app.db import audit
 router = APIRouter(prefix='/api/internal', tags=['internal'])
 
 MAX_EVENTS = 500
+MAX_BODY_BYTES = 4 * 1024 * 1024
 MAX_SKEW_SECONDS = 300
 # 12 digits max: int() raises ValueError past ~4300 digits, which would be a 500.
 _TIMESTAMP = re.compile(r'[0-9]{1,12}')
+_SIGNATURE = re.compile(r'[0-9a-f]{64}')
 
 
 class AuditEvent(BaseModel):
@@ -58,15 +60,31 @@ def _fresh_timestamp(header: str | None, now: int) -> str | None:
 
 @router.post('/audit')
 async def ingest_audit(request: Request):
-    raw = await request.body()
     if len(config.CRED_SIGNING_KEY) < 32:
         raise HTTPException(503, 'Agent credentials are not configured (set CRED_SIGNING_KEY, 32+ characters)')
     timestamp = _fresh_timestamp(request.headers.get('x-storzo-timestamp'), int(time.time()))
     if timestamp is None:
         raise HTTPException(401, 'bad timestamp')
     supplied = request.headers.get('x-storzo-signature', '')
+    if _SIGNATURE.fullmatch(supplied) is None:
+        raise HTTPException(401, 'bad signature')
+
+    # Header checks must precede all body reads, including size-limit handling.
+    try:
+        content_length = int(request.headers.get('content-length', '0'))
+    except ValueError:
+        # The transport validates framing; still enforce our cap while streaming.
+        content_length = 0
+    if content_length > MAX_BODY_BYTES:
+        raise HTTPException(413, 'audit batch too large')
+    raw = bytearray()
+    async for chunk in request.stream():
+        if len(raw) + len(chunk) > MAX_BODY_BYTES:
+            raise HTTPException(413, 'audit batch too large')
+        raw.extend(chunk)
+
     expected = hmac.new(config.CRED_SIGNING_KEY.encode(), timestamp.encode() + b'.' + raw, hashlib.sha256).hexdigest()
-    if not supplied or not hmac.compare_digest(supplied, expected):
+    if not hmac.compare_digest(supplied, expected):
         raise HTTPException(401, 'bad signature')
     try:
         payload = json.loads(raw)
