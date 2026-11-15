@@ -205,7 +205,7 @@ func TestProxyRequests(t *testing.T) {
 				t.Fatalf("audit count=%d", len(audit.events))
 			}
 			e := audit.events[0]
-			if e.Status != tc.status || e.Decision != decision || e.Method != tc.method || (decision == "deny" && e.Kid != "") || (decision == "allow" && e.Kid != map[bool]string{true: masterKey, false: agentKey}[tc.master]) || e.Bytes != int64(w.Body.Len()) {
+			if e.Status != tc.status || e.Decision != decision || e.Method != tc.method || ((tc.expired || tc.headers.Get("Content-Encoding") == "aws-chunked") && e.Kid != "") || (!tc.expired && tc.headers.Get("Content-Encoding") != "aws-chunked" && e.Kid != map[bool]string{true: masterKey, false: agentKey}[tc.master]) || e.Bytes != int64(w.Body.Len()) {
 				t.Errorf("audit=%+v", e)
 			}
 		})
