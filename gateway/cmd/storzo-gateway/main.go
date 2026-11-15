@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	"github.com/imthi16/storzo/gateway/internal/audit"
 	"github.com/imthi16/storzo/gateway/internal/proxy"
 )
 
@@ -18,13 +20,31 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	handler, err := proxy.New(cfg, nil)
+	listener, err := net.Listen("tcp", cfg.Listen)
+	if err != nil {
+		return errors.New("gateway listener failed")
+	}
+	defer listener.Close()
+	return serve(ctx, cfg, listener)
+}
+
+// serve owns the emitter until the HTTP server has finished draining.
+func serve(ctx context.Context, cfg proxy.Config, listener net.Listener) (result error) {
+	emitter := audit.New(audit.Config{URL: cfg.AuditURL, SigningKey: cfg.CredSigningKey})
+	defer func() {
+		flush, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := emitter.Close(flush); err != nil {
+			result = errors.Join(result, errors.New("gateway audit flush timed out"))
+		}
+	}()
+	handler, err := proxy.New(cfg, emitter)
 	if err != nil {
 		return err
 	}
 	server := &http.Server{Addr: cfg.Listen, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
 	done := make(chan error, 1)
-	go func() { done <- server.ListenAndServe() }()
+	go func() { done <- server.Serve(listener) }()
 	select {
 	case err := <-done:
 		if errors.Is(err, http.ErrServerClosed) {

@@ -286,14 +286,14 @@ func TestBodiesAndHeaders(t *testing.T) {
 // fails_when=missing names are omitted, secret values leak, or invalid limits pass;
 // no_claim=deployment environment configuration or network listener reachability.
 func TestConfigFromEnv(t *testing.T) {
-	for _, name := range []string{"STORAGE_ENDPOINT", "STORAGE_ACCESS_KEY", "STORAGE_SECRET_KEY", "CRED_SIGNING_KEY", "GATEWAY_LISTEN", "GATEWAY_MAX_HASHED_BODY_MB"} {
+	for _, name := range []string{"STORAGE_ENDPOINT", "STORAGE_ACCESS_KEY", "STORAGE_SECRET_KEY", "CRED_SIGNING_KEY", "AUDIT_URL", "GATEWAY_LISTEN", "GATEWAY_MAX_HASHED_BODY_MB"} {
 		t.Setenv(name, "")
 	}
 	_, err := ConfigFromEnv()
 	if err == nil {
 		t.Fatal("missing config accepted")
 	}
-	for _, name := range []string{"STORAGE_ENDPOINT", "STORAGE_ACCESS_KEY", "STORAGE_SECRET_KEY", "CRED_SIGNING_KEY"} {
+	for _, name := range []string{"STORAGE_ENDPOINT", "STORAGE_ACCESS_KEY", "STORAGE_SECRET_KEY", "CRED_SIGNING_KEY", "AUDIT_URL"} {
 		if !strings.Contains(err.Error(), name) {
 			t.Errorf("missing name %s: %v", name, err)
 		}
@@ -302,8 +302,9 @@ func TestConfigFromEnv(t *testing.T) {
 	t.Setenv("STORAGE_ACCESS_KEY", masterKey)
 	t.Setenv("STORAGE_SECRET_KEY", masterSecret)
 	t.Setenv("CRED_SIGNING_KEY", signingKey)
+	t.Setenv("AUDIT_URL", "http://backend:8000/api/internal/audit")
 	c, err := ConfigFromEnv()
-	if err != nil || c.Listen != ":8333" || c.MaxHashedBodyBytes != 64<<20 {
+	if err != nil || c.Listen != ":8333" || c.MaxHashedBodyBytes != 64<<20 || c.AuditURL != "http://backend:8000/api/internal/audit" {
 		t.Fatalf("config=%+v err=%v", c, err)
 	}
 	for _, limit := range []string{"0", "-1", "bad", "9223372036854775807"} {
