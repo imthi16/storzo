@@ -14,6 +14,10 @@
 - [ ] Test power-loss/crash failure with actual disk sync guarantees, full disks, network partitions, node failover, upgrades/rollbacks.
 - [ ] Confirm legal/compliance requirements: retention, legal hold, deletion, encryption, privacy and audit retention.
 - [ ] Expose the web UI only through trusted TLS ingress; configure WAF/rate limits as required.
+- [ ] Before giving any agent a scoped credential: ship the gateway proxy that enforces it and make SeaweedFS internal-only. Until then the credential is not a boundary and `:8333` still takes the master key.
+- [ ] Independent security review of `gateway/internal/verify` (token, SigV4, scope). Only automated review has run so far.
+- [ ] Set `CRED_SIGNING_KEY` (32+ characters) and plan its rotation. It signs agent tokens and authenticates audit ingest; the endpoints refuse to work without it.
+- [ ] Harden audit ingest: replay protection, length limits on event fields, and keep the backend unreachable except through nginx (`/api/internal/` is blocked there only).
 
 ## Already present in the MVP source
 
@@ -22,6 +26,7 @@
 - [x] Object key/bucket validation in management API; image preview restricted to raster MIME types.
 - [x] SeaweedFS S3 local binding defaults to 127.0.0.1 for Compose.
 - [x] Container state is volume-mounted, and admin action audit is persisted separately.
+- [x] Agent credentials are signed, bound to one bucket and prefix (trailing `/` required), expire within 1 hour, and issuing is audited. Verification code exists; enforcement does not (see above).
 
 ## Known limitations
 

@@ -20,6 +20,11 @@ Status meanings: **Implemented** = source code exists, subject to end-to-end val
 | Backend | Versioning and object lock | Delegated/Needs validation | Do not assume MinIO parity without test |
 | Backend | IAM and bucket policies | Delegated/Needs validation | Current UI only has one administrative identity |
 | Backend | Replication and erasure coding | Delegated/Needs validation | Demo is SINGLE-NODE without replication |
+| Backend | Scoped agent credentials API | Implemented | `POST /api/credentials`: bucket + prefix (ends in `/`) + `ro`/`rw`, TTL up to 3600 s. Nothing running enforces them yet |
+| Backend | Gateway audit ingest | Implemented | `POST /api/internal/audit`, HMAC-authed instead of a session; blocked at nginx. No replay protection yet |
+| Gateway | Credential verification (token, SigV4, scope matrix) | Implemented as library | Go tests with Python-issued vectors. Not a server; not run against AWS CLI or SeaweedFS |
+| Gateway | MCP stdio server (`storzo-mcp`) | Implemented as source | Tested against a fake S3 only |
+| Gateway | S3 proxy, SeaweedFS internal-only, audit emission | Planned | See `docs/SPEC-agent-gateway.md` |
 | Backend | Per-tenant quota | Planned | Requires policy/identity model |
 | Backend | Content-addressable dedupe | Planned | Metadata/references and race safety needed |
 | Backend | Automatic original-preserving variants | Planned | Needs async queue and cache invalidation |
@@ -29,7 +34,8 @@ Status meanings: **Implemented** = source code exists, subject to end-to-end val
 | Ops | Frontend/backend Dockerfiles | Implemented as source | Local image build still required |
 | Ops | Helm chart and SeaweedFS chart values | Implemented as config | Unvalidated live deployment; adjust cluster needs |
 | Ops | Secrets generator | Implemented | Random generated secret; local .env only |
-| Ops | Backend unit tests | Implemented and passed | Three cases with fake S3 |
+| Ops | Backend unit tests | Implemented and passed | Fake-S3 suite; CI also runs ruff, mypy and an 85% coverage floor |
+| Ops | Gateway Go tests | Implemented, local only | `cd gateway && go vet ./... && go test ./...`. No Go job in CI yet |
 | Ops | Real S3 integrity smoke script | Implemented as script | Run only against live stack |
 | Ops | Verified restart persistence | Manual validation required | Do not mark complete based on PVC configuration alone |
 | Ops | TLS / enterprise auth / MFA | Planned | Must be implemented before internet exposure |
