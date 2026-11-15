@@ -199,8 +199,8 @@ func assertAudit(t *testing.T, rig *gatewayRig, denies int) {
 			continue
 		}
 		got++
-		if ev.Kid != "" {
-			t.Errorf("denial kid=%q, want empty", ev.Kid)
+		if ev.Kid != "STZAAAAAAAAAAAAAAAA" {
+			t.Errorf("denial kid=%q, want verified fixture kid %q", ev.Kid, "STZAAAAAAAAAAAAAAAA")
 		}
 	}
 	if got != denies {

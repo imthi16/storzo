@@ -104,6 +104,7 @@ func readAuth(r *http.Request) (authentication, error) {
 // scope (except for authenticated master requests). On allow it returns claims
 // and sets X-Amz-Content-Sha256 to the verified payload hash or UNSIGNED-PAYLOAD;
 // on denial it returns an S3 *Error.
+// A non-empty Claims alongside a non-nil error means authenticated but denied.
 // A hashed payload is read and restored in memory. UNSIGNED-PAYLOAD is not read.
 // The caller must preserve the unmodified path-style URL and impose its own
 // transport/body limits when this core is wired to a server.
@@ -239,18 +240,18 @@ func (v *Verifier) Verify(r *http.Request, now time.Time) (Claims, error) {
 			return empty, err
 		}
 	}
+	c.Master = master
 	if master {
 		for name := range r.Header {
 			if strings.EqualFold(name, "X-Amz-Copy-Source") {
-				return empty, unsupported()
+				return c, unsupported()
 			}
 		}
 	} else if err := Scope(r, c); err != nil {
-		return empty, err
+		return c, err
 	}
 	// Publish the verified hash for the forwarding signer, including implicit hashes.
 	r.Header.Set("X-Amz-Content-Sha256", payload)
-	c.Master = master
 	return c, nil
 }
 

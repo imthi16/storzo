@@ -217,6 +217,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	claims, err := h.verifier.Verify(r, time.Now().UTC())
 	if err != nil {
+		// Nonempty error claims authenticate identity only; they never allow forwarding.
+		if claims.Kid != "" {
+			event.Kid = claims.Kid
+		}
 		var s3err *verify.Error
 		if !errors.As(err, &s3err) {
 			s3err = &verify.Error{Status: 403, Code: "AccessDenied", Message: "Request denied."}
