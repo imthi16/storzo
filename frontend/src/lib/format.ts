@@ -66,9 +66,10 @@ export const activityRowLabel = (event: {id: number; action: string; detail: str
   return `Open event ${event.id}: ${title}, ${gw.method}, ${decision}, status ${gw.status}, ${where}`;
 };
 
-// An empty kid means the gateway did not store one. Allowed requests store it;
-// a signed request denied by scope does not. Say neither cause.
-export const GATEWAY_KID_NOTE = 'The gateway records a credential id only for allowed requests.';
+// An empty kid means the gateway did not store one. It stores the kid of every
+// request whose signature it verified, including scope denials, so empty means
+// authentication failed or the event predates that behavior.
+export const GATEWAY_KID_NOTE = 'No credential id was stored: authentication failed, or the event was recorded before the gateway kept the id of authenticated denials.';
 export const gatewayKidDisplay = (kid: string): {value: string; note: string | null} =>
   kid ? {value: kid, note: null} : {value: 'not recorded', note: GATEWAY_KID_NOTE};
 
