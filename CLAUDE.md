@@ -42,7 +42,7 @@ cd backend && python3 tests/gateway_vectors.py
 python3 scripts/gateway_e2e.py            # --self-test checks its audit-coverage matcher offline
 ```
 
-CI (`.github/workflows/ci.yml`) runs backend ruff + mypy + pytest (85% coverage) + pip-audit, frontend lint/test/build/audit, image build (backend, frontend, gateway) + Trivy, Helm lint, gateway gofmt/vet/race tests, and `setup_env.py` + compose config validation. Never run `docker compose down -v` on data you care about — it deletes the named volumes.
+CI (`.github/workflows/ci.yml`) runs backend ruff + mypy + pytest (85% coverage) + pip-audit, frontend lint/test/build/audit, image build (backend, frontend, gateway) + Trivy, Helm lint, gateway gofmt/vet/race tests, `setup_env.py` + compose config validation, and an `e2e` job that brings the stack up with Compose and runs `scripts/gateway_e2e.py` then the Playwright suite (failure artifacts are uploaded). Never run `docker compose down -v` on data you care about — it deletes the named volumes.
 
 ## Architecture
 
