@@ -27,7 +27,19 @@ type Claims struct {
 	Jti    string `json:"jti"`
 }
 
-type Verifier struct{ key []byte }
+type Verifier struct {
+	key                        []byte
+	masterAccess, masterSecret string
+}
+
+// NewWithMaster also accepts tokenless requests authenticated with the master key.
+func NewWithMaster(signingKey, access, secret string) (*Verifier, error) {
+	v, err := New(signingKey)
+	if err == nil {
+		v.masterAccess, v.masterSecret = access, secret
+	}
+	return v, err
+}
 
 func New(signingKey string) (*Verifier, error) {
 	if len([]rune(signingKey)) < 32 {
