@@ -18,6 +18,8 @@ var kidPattern = regexp.MustCompile(`^STZ[A-Z2-7]{16}$`)
 var bucketPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$`)
 
 type Claims struct {
+	// Master is set only after successful master SigV4 verification, never by token JSON.
+	Master bool   `json:"-"`
 	Kid    string `json:"kid"`
 	Bucket string `json:"bucket"`
 	Prefix string `json:"prefix"`

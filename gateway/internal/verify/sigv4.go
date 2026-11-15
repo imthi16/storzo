@@ -255,5 +255,6 @@ func (v *Verifier) Verify(r *http.Request, now time.Time) (Claims, error) {
 	}
 	// Publish the verified hash for the forwarding signer, including implicit hashes.
 	r.Header.Set("X-Amz-Content-Sha256", payload)
+	c.Master = master
 	return c, nil
 }
