@@ -21,6 +21,9 @@ import (
 // DefaultMaxBytes is the default cap for get_object inline text (1 MiB).
 const DefaultMaxBytes = 1048576
 
+// MaxInlineBytes is the hard ceiling for get_object max_bytes (4 MiB).
+const MaxInlineBytes = 4 * 1024 * 1024
+
 // DefaultMaxKeys is the default page size for list_objects.
 const DefaultMaxKeys = 100
 
@@ -104,7 +107,7 @@ type listObjectsArgs struct {
 // getObjectArgs are the arguments for the get_object tool.
 type getObjectArgs struct {
 	Key      string `json:"key" jsonschema:"object key to read"`
-	MaxBytes int64  `json:"max_bytes,omitempty" jsonschema:"max inline bytes, defaults to 1048576"`
+	MaxBytes int64  `json:"max_bytes,omitempty" jsonschema:"max inline bytes; 0 or omitted defaults to 1048576 (1 MiB); maximum 4194304 (4 MiB)"`
 }
 
 // putObjectArgs are the arguments for the put_object tool.
@@ -222,8 +225,8 @@ func (a *app) getObject(ctx context.Context, req *mcp.CallToolRequest, args getO
 	if maxBytes == 0 {
 		maxBytes = DefaultMaxBytes
 	}
-	if maxBytes < 0 {
-		return nil, nil, fmt.Errorf("max_bytes must be >= 0")
+	if maxBytes < 0 || maxBytes > MaxInlineBytes {
+		return nil, nil, fmt.Errorf("max_bytes out of range: want 0-%d (0 uses the %d-byte default)", MaxInlineBytes, DefaultMaxBytes)
 	}
 	out, err := a.s3.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(a.cfg.Bucket),
@@ -233,6 +236,7 @@ func (a *app) getObject(ctx context.Context, req *mcp.CallToolRequest, args getO
 		return nil, nil, err
 	}
 	defer out.Body.Close()
+	// The validated 4 MiB ceiling makes this extra sentinel byte overflow-safe.
 	limited := io.LimitReader(out.Body, maxBytes+1)
 	data, err := io.ReadAll(limited)
 	if err != nil {
