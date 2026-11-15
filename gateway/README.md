@@ -1,0 +1,61 @@
+# Agent gateway verification core
+
+This module contains the verification core only. It does not run a server,
+proxy to SeaweedFS, re-sign upstream traffic, or emit audit events.
+
+The Python credential issuer signs the **base64url claims segment**, not the
+raw JSON bytes. Token verification follows that implementation and accepts
+expiry through `exp + 60` seconds inclusive. Secrets are derived as lowercase
+hex HMAC-SHA256 of `secret|kid`.
+
+`SafeKey` matches the Python validator on decoded UTF-8 keys. Requests must
+retain the original path-style URL: do not clean paths or decode them twice.
+`Scope` operates on the decoded `net/url.URL.Path` and rejects unsupported
+object and bucket subresources. Call scope enforcement only after authentication.
+
+Regenerate the public test fixtures from the repository's real issuer and
+botocore signer:
+
+```sh
+cd backend
+python3 tests/gateway_vectors.py
+cd ../gateway
+go vet ./...
+go test ./...
+```
+
+The fixture signing key is public synthetic test data. Fixture generation uses
+random access keys/UUIDs and a fixed signing timestamp, so the JSON
+is intentionally regenerated rather than a byte-for-byte reproducible snapshot.
+
+`Verifier.Verify(request, now)` verifies token integrity/expiry, binds the token's
+`kid` to SigV4 credentials, verifies the signature, and enforces scope. Errors are
+`*verify.Error`; its `Write` method emits an S3 XML response. No request is sent
+upstream. `Scope` is also exposed for isolated policy tests, and must not be used
+as a substitute for `Verify` at an HTTP trust boundary.
+
+SigV4 canonicalization and signing come from AWS SDK for Go v2's maintained
+signer. Its public API does not expose verification: this module parses the
+authentication envelope, re-signs a clone containing the declared signed headers,
+and compares the resulting signature in constant time. It does not implement
+canonicalization. S3 path escaping is configured explicitly, and presigning
+header hoisting is disabled because the incoming signed-header selection is
+already fixed. Unsupported signed-header combinations fail closed.
+
+Both header auth and presigned URLs require a scoped session token. Header
+signatures have a 15-minute validity window; presigns use their signed
+`X-Amz-Expires` value (1–604800 seconds), always bounded by credential expiry.
+The clock skew is 60 seconds. Expired credentials return `ExpiredToken` even
+when a request signature is also stale.
+
+`UNSIGNED-PAYLOAD` and complete SHA-256 payload hashes are supported. Hashed
+bodies are read, checked, and restored in memory; a future HTTP server must
+supply body size limits. Unsigned payloads intentionally provide no body
+integrity guarantee. `STREAMING-*` payloads and `aws-chunked` content encoding
+return 501, as does CopyObject. A future server must preserve escaped paths
+and must not use a path-cleaning router before this verifier.
+
+Tests cover the scope matrix, Python-issued credentials, botocore header and
+presigned signatures for GET/list/PUT, Go SDK signer requests, tampering,
+payload hashing, expiry boundaries, and XML errors. These are verification-core
+tests; they do not exercise a live AWS CLI, SeaweedFS, proxy, MCP or audit sink.

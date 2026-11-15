@@ -1,0 +1,142 @@
+{
+  "signing_key": "gateway-public-test-signing-key-1234567890",
+  "now": 1800000000,
+  "vectors": [
+    {
+      "access_key_id": "STZNAPXWSH4CP4BXUPT",
+      "secret_access_key": "12cec339ab59af67bf3b0c5dd733b26d1a3cb0aa7b30113a6045c3a3ca96d6e4",
+      "session_token": "eyJidWNrZXQiOiJhZ2VudC1kYXRhIiwiZXhwIjoxODAwMDAwOTAwLCJpYXQiOjE4MDAwMDAwMDAsImp0aSI6IjM3MDFkN2Q0LTE1ODgtNGRiMC05NTAwLTIyMzE3MmM2MzdkNSIsImtpZCI6IlNUWk5BUFhXU0g0Q1A0QlhVUFQiLCJtb2RlIjoicm8iLCJwcmVmaXgiOiJydW4tNDIvIn0.R9Ar-DQiero5G_58MHw7FtdM_jEh9qfeIxLOH4nzL_4",
+      "expires_at": 1800000900,
+      "claims": {
+        "kid": "STZNAPXWSH4CP4BXUPT",
+        "bucket": "agent-data",
+        "prefix": "run-42/",
+        "mode": "ro",
+        "iat": 1800000000,
+        "exp": 1800000900,
+        "jti": "3701d7d4-1588-4db0-9500-223172c637d5"
+      },
+      "requests": [
+        {
+          "method": "GET",
+          "url": "https://s3.example.test/agent-data/run-42/a%20b%2Bc.txt",
+          "body": "",
+          "headers": {
+            "X-Amz-Date": "20270115T080000Z",
+            "X-Amz-Security-Token": "eyJidWNrZXQiOiJhZ2VudC1kYXRhIiwiZXhwIjoxODAwMDAwOTAwLCJpYXQiOjE4MDAwMDAwMDAsImp0aSI6IjM3MDFkN2Q0LTE1ODgtNGRiMC05NTAwLTIyMzE3MmM2MzdkNSIsImtpZCI6IlNUWk5BUFhXU0g0Q1A0QlhVUFQiLCJtb2RlIjoicm8iLCJwcmVmaXgiOiJydW4tNDIvIn0.R9Ar-DQiero5G_58MHw7FtdM_jEh9qfeIxLOH4nzL_4",
+            "X-Amz-Content-SHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "Authorization": "AWS4-HMAC-SHA256 Credential=STZNAPXWSH4CP4BXUPT/20270115/us-east-1/s3/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date;x-amz-security-token, Signature=53e427ec04302d98b4ba6c8eed1a6cd303911e4cafdd945f946753f2e8d02f3e"
+          }
+        },
+        {
+          "method": "GET",
+          "url": "https://s3.example.test/agent-data/run-42/a%20b%2Bc.txt?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=STZNAPXWSH4CP4BXUPT%2F20270115%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20270115T080000Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Security-Token=eyJidWNrZXQiOiJhZ2VudC1kYXRhIiwiZXhwIjoxODAwMDAwOTAwLCJpYXQiOjE4MDAwMDAwMDAsImp0aSI6IjM3MDFkN2Q0LTE1ODgtNGRiMC05NTAwLTIyMzE3MmM2MzdkNSIsImtpZCI6IlNUWk5BUFhXU0g0Q1A0QlhVUFQiLCJtb2RlIjoicm8iLCJwcmVmaXgiOiJydW4tNDIvIn0.R9Ar-DQiero5G_58MHw7FtdM_jEh9qfeIxLOH4nzL_4&X-Amz-Signature=d40f3c8a01894e5c0a2bdf90fe6ed430081648fb474e30a34b6a176a036ce8f2",
+          "body": "",
+          "headers": {}
+        },
+        {
+          "method": "GET",
+          "url": "https://s3.example.test/agent-data?list-type=2&prefix=run-42%2F&delimiter=%2F",
+          "body": "",
+          "headers": {
+            "X-Amz-Date": "20270115T080000Z",
+            "X-Amz-Security-Token": "eyJidWNrZXQiOiJhZ2VudC1kYXRhIiwiZXhwIjoxODAwMDAwOTAwLCJpYXQiOjE4MDAwMDAwMDAsImp0aSI6IjM3MDFkN2Q0LTE1ODgtNGRiMC05NTAwLTIyMzE3MmM2MzdkNSIsImtpZCI6IlNUWk5BUFhXU0g0Q1A0QlhVUFQiLCJtb2RlIjoicm8iLCJwcmVmaXgiOiJydW4tNDIvIn0.R9Ar-DQiero5G_58MHw7FtdM_jEh9qfeIxLOH4nzL_4",
+            "X-Amz-Content-SHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "Authorization": "AWS4-HMAC-SHA256 Credential=STZNAPXWSH4CP4BXUPT/20270115/us-east-1/s3/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date;x-amz-security-token, Signature=e7a5714323a6709b88f6f9aeeeef667249e00920eea3c67815d99ef1d7f76fb2"
+          }
+        },
+        {
+          "method": "GET",
+          "url": "https://s3.example.test/agent-data?list-type=2&prefix=run-42%2F&delimiter=%2F&X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=STZNAPXWSH4CP4BXUPT%2F20270115%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20270115T080000Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Security-Token=eyJidWNrZXQiOiJhZ2VudC1kYXRhIiwiZXhwIjoxODAwMDAwOTAwLCJpYXQiOjE4MDAwMDAwMDAsImp0aSI6IjM3MDFkN2Q0LTE1ODgtNGRiMC05NTAwLTIyMzE3MmM2MzdkNSIsImtpZCI6IlNUWk5BUFhXU0g0Q1A0QlhVUFQiLCJtb2RlIjoicm8iLCJwcmVmaXgiOiJydW4tNDIvIn0.R9Ar-DQiero5G_58MHw7FtdM_jEh9qfeIxLOH4nzL_4&X-Amz-Signature=8d95bea068151354a5cedf6a5ac9548f62bcdb3053ac8f4443fdf4ff87eb2f1f",
+          "body": "",
+          "headers": {}
+        },
+        {
+          "method": "PUT",
+          "url": "https://s3.example.test/agent-data/run-42/upload",
+          "body": "hello gateway",
+          "headers": {
+            "X-Amz-Date": "20270115T080000Z",
+            "X-Amz-Security-Token": "eyJidWNrZXQiOiJhZ2VudC1kYXRhIiwiZXhwIjoxODAwMDAwOTAwLCJpYXQiOjE4MDAwMDAwMDAsImp0aSI6IjM3MDFkN2Q0LTE1ODgtNGRiMC05NTAwLTIyMzE3MmM2MzdkNSIsImtpZCI6IlNUWk5BUFhXU0g0Q1A0QlhVUFQiLCJtb2RlIjoicm8iLCJwcmVmaXgiOiJydW4tNDIvIn0.R9Ar-DQiero5G_58MHw7FtdM_jEh9qfeIxLOH4nzL_4",
+            "X-Amz-Content-SHA256": "02342aebe83cfbe86a243acb97beae2bf8e642dc03a88dac11f45b4027e6e178",
+            "Authorization": "AWS4-HMAC-SHA256 Credential=STZNAPXWSH4CP4BXUPT/20270115/us-east-1/s3/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date;x-amz-security-token, Signature=4105a0b9d17b6c25e302b0bfbe9324a0d17e324969f4910f04403f8f7542f27d"
+          }
+        },
+        {
+          "method": "PUT",
+          "url": "https://s3.example.test/agent-data/run-42/upload?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=STZNAPXWSH4CP4BXUPT%2F20270115%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20270115T080000Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Security-Token=eyJidWNrZXQiOiJhZ2VudC1kYXRhIiwiZXhwIjoxODAwMDAwOTAwLCJpYXQiOjE4MDAwMDAwMDAsImp0aSI6IjM3MDFkN2Q0LTE1ODgtNGRiMC05NTAwLTIyMzE3MmM2MzdkNSIsImtpZCI6IlNUWk5BUFhXU0g0Q1A0QlhVUFQiLCJtb2RlIjoicm8iLCJwcmVmaXgiOiJydW4tNDIvIn0.R9Ar-DQiero5G_58MHw7FtdM_jEh9qfeIxLOH4nzL_4&X-Amz-Signature=4d0edd915a378b52979670080215abad279445b6004bb15917e97874d16ed125",
+          "body": "hello gateway",
+          "headers": {}
+        }
+      ]
+    },
+    {
+      "access_key_id": "STZOPARK2ICX5CGB5NA",
+      "secret_access_key": "5b54ecc1d70c11ba5fd72ea70a83f7a520cedace18c08d938e684c182bd53850",
+      "session_token": "eyJidWNrZXQiOiJhZ2VudC1kYXRhIiwiZXhwIjoxODAwMDAwOTAwLCJpYXQiOjE4MDAwMDAwMDAsImp0aSI6IjBkYjk0YjQ0LWQzMTUtNDRjZi1iMThhLTJjNTExZjhhNWY0NCIsImtpZCI6IlNUWk9QQVJLMklDWDVDR0I1TkEiLCJtb2RlIjoicnciLCJwcmVmaXgiOiJydW4tNDIvIn0.WTPjkDsWO5nhRj34bNWVRB662Fdb_v1wmPxeLem2jnk",
+      "expires_at": 1800000900,
+      "claims": {
+        "kid": "STZOPARK2ICX5CGB5NA",
+        "bucket": "agent-data",
+        "prefix": "run-42/",
+        "mode": "rw",
+        "iat": 1800000000,
+        "exp": 1800000900,
+        "jti": "0db94b44-d315-44cf-b18a-2c511f8a5f44"
+      },
+      "requests": [
+        {
+          "method": "GET",
+          "url": "https://s3.example.test/agent-data/run-42/a%20b%2Bc.txt",
+          "body": "",
+          "headers": {
+            "X-Amz-Date": "20270115T080000Z",
+            "X-Amz-Security-Token": "eyJidWNrZXQiOiJhZ2VudC1kYXRhIiwiZXhwIjoxODAwMDAwOTAwLCJpYXQiOjE4MDAwMDAwMDAsImp0aSI6IjBkYjk0YjQ0LWQzMTUtNDRjZi1iMThhLTJjNTExZjhhNWY0NCIsImtpZCI6IlNUWk9QQVJLMklDWDVDR0I1TkEiLCJtb2RlIjoicnciLCJwcmVmaXgiOiJydW4tNDIvIn0.WTPjkDsWO5nhRj34bNWVRB662Fdb_v1wmPxeLem2jnk",
+            "X-Amz-Content-SHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "Authorization": "AWS4-HMAC-SHA256 Credential=STZOPARK2ICX5CGB5NA/20270115/us-east-1/s3/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date;x-amz-security-token, Signature=b3e409f6d272cdeef892108f5405c4a4008ec805036d375984b2b84a3099ec95"
+          }
+        },
+        {
+          "method": "GET",
+          "url": "https://s3.example.test/agent-data/run-42/a%20b%2Bc.txt?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=STZOPARK2ICX5CGB5NA%2F20270115%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20270115T080000Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Security-Token=eyJidWNrZXQiOiJhZ2VudC1kYXRhIiwiZXhwIjoxODAwMDAwOTAwLCJpYXQiOjE4MDAwMDAwMDAsImp0aSI6IjBkYjk0YjQ0LWQzMTUtNDRjZi1iMThhLTJjNTExZjhhNWY0NCIsImtpZCI6IlNUWk9QQVJLMklDWDVDR0I1TkEiLCJtb2RlIjoicnciLCJwcmVmaXgiOiJydW4tNDIvIn0.WTPjkDsWO5nhRj34bNWVRB662Fdb_v1wmPxeLem2jnk&X-Amz-Signature=629b072a3d00ee282a8d7253e98baddcf93d8d5e33e19d0d7e77898aa836dc43",
+          "body": "",
+          "headers": {}
+        },
+        {
+          "method": "GET",
+          "url": "https://s3.example.test/agent-data?list-type=2&prefix=run-42%2F&delimiter=%2F",
+          "body": "",
+          "headers": {
+            "X-Amz-Date": "20270115T080000Z",
+            "X-Amz-Security-Token": "eyJidWNrZXQiOiJhZ2VudC1kYXRhIiwiZXhwIjoxODAwMDAwOTAwLCJpYXQiOjE4MDAwMDAwMDAsImp0aSI6IjBkYjk0YjQ0LWQzMTUtNDRjZi1iMThhLTJjNTExZjhhNWY0NCIsImtpZCI6IlNUWk9QQVJLMklDWDVDR0I1TkEiLCJtb2RlIjoicnciLCJwcmVmaXgiOiJydW4tNDIvIn0.WTPjkDsWO5nhRj34bNWVRB662Fdb_v1wmPxeLem2jnk",
+            "X-Amz-Content-SHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "Authorization": "AWS4-HMAC-SHA256 Credential=STZOPARK2ICX5CGB5NA/20270115/us-east-1/s3/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date;x-amz-security-token, Signature=8ae775b1041edb65849d5fb16a838433fb5caf0fa80da0d9b91f3b4815b2288d"
+          }
+        },
+        {
+          "method": "GET",
+          "url": "https://s3.example.test/agent-data?list-type=2&prefix=run-42%2F&delimiter=%2F&X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=STZOPARK2ICX5CGB5NA%2F20270115%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20270115T080000Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Security-Token=eyJidWNrZXQiOiJhZ2VudC1kYXRhIiwiZXhwIjoxODAwMDAwOTAwLCJpYXQiOjE4MDAwMDAwMDAsImp0aSI6IjBkYjk0YjQ0LWQzMTUtNDRjZi1iMThhLTJjNTExZjhhNWY0NCIsImtpZCI6IlNUWk9QQVJLMklDWDVDR0I1TkEiLCJtb2RlIjoicnciLCJwcmVmaXgiOiJydW4tNDIvIn0.WTPjkDsWO5nhRj34bNWVRB662Fdb_v1wmPxeLem2jnk&X-Amz-Signature=9895d10c8485149af6579683ac78aa095aa9b9008a08c375cf1505519b175831",
+          "body": "",
+          "headers": {}
+        },
+        {
+          "method": "PUT",
+          "url": "https://s3.example.test/agent-data/run-42/upload",
+          "body": "hello gateway",
+          "headers": {
+            "X-Amz-Date": "20270115T080000Z",
+            "X-Amz-Security-Token": "eyJidWNrZXQiOiJhZ2VudC1kYXRhIiwiZXhwIjoxODAwMDAwOTAwLCJpYXQiOjE4MDAwMDAwMDAsImp0aSI6IjBkYjk0YjQ0LWQzMTUtNDRjZi1iMThhLTJjNTExZjhhNWY0NCIsImtpZCI6IlNUWk9QQVJLMklDWDVDR0I1TkEiLCJtb2RlIjoicnciLCJwcmVmaXgiOiJydW4tNDIvIn0.WTPjkDsWO5nhRj34bNWVRB662Fdb_v1wmPxeLem2jnk",
+            "X-Amz-Content-SHA256": "02342aebe83cfbe86a243acb97beae2bf8e642dc03a88dac11f45b4027e6e178",
+            "Authorization": "AWS4-HMAC-SHA256 Credential=STZOPARK2ICX5CGB5NA/20270115/us-east-1/s3/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date;x-amz-security-token, Signature=5cd8168b72accb0915b8c77037f26820c3c46c35d4e52c7988a98c5ab5861128"
+          }
+        },
+        {
+          "method": "PUT",
+          "url": "https://s3.example.test/agent-data/run-42/upload?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=STZOPARK2ICX5CGB5NA%2F20270115%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20270115T080000Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Security-Token=eyJidWNrZXQiOiJhZ2VudC1kYXRhIiwiZXhwIjoxODAwMDAwOTAwLCJpYXQiOjE4MDAwMDAwMDAsImp0aSI6IjBkYjk0YjQ0LWQzMTUtNDRjZi1iMThhLTJjNTExZjhhNWY0NCIsImtpZCI6IlNUWk9QQVJLMklDWDVDR0I1TkEiLCJtb2RlIjoicnciLCJwcmVmaXgiOiJydW4tNDIvIn0.WTPjkDsWO5nhRj34bNWVRB662Fdb_v1wmPxeLem2jnk&X-Amz-Signature=aafe9cefc9ca1e067e93bcd2adaf65954fab74330f0f2e582c1763fd21d72fe4",
+          "body": "hello gateway",
+          "headers": {}
+        }
+      ]
+    }
+  ]
+}
