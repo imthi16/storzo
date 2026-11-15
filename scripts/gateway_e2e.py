@@ -25,7 +25,7 @@ import uuid
 import xml.etree.ElementTree as ET
 from datetime import UTC, datetime
 from pathlib import Path
-from urllib.parse import urlencode, urlsplit
+from urllib.parse import unquote, urlencode, urlsplit
 
 import boto3
 from botocore.auth import S3SigV4Auth
@@ -164,7 +164,10 @@ def anonymous_post(base: str, path: str, body: dict) -> int:
 
 
 def s3_client(endpoint: str, access: str, secret: str, token: str | None = None):
-    return boto3.client(
+    # A private session keeps the response hook off the process-wide emitter.
+    # Registering on the default session would record each call once per client.
+    session = boto3.session.Session()
+    client = session.client(
         's3',
         endpoint_url=endpoint,
         aws_access_key_id=access,
@@ -173,6 +176,8 @@ def s3_client(endpoint: str, access: str, secret: str, token: str | None = None)
         region_name='us-east-1',
         config=S3_CONFIG,
     )
+    watch_client(client)
+    return client
 
 
 def invoke(fn):
@@ -200,6 +205,7 @@ def raw_request(endpoint: str, method: str, path: str, access: str, secret: str,
         connection.request(method, path, headers=headers)
         response = connection.getresponse()
         body = response.read()
+        record_observed(method, path, response.status)
         return response.status, xml_code(body)
     finally:
         connection.close()
@@ -297,10 +303,96 @@ def written_since(row: dict, started: datetime) -> bool:
     return seen >= started
 
 
+# method, bucket, key, status, decision. One entry per HTTP response the gateway returned.
+LEDGER: list[tuple[str, str, str, str, str]] = []
+
+
+def observed_decision(status: int) -> str:
+    # 2xx/3xx passed the gateway. 4xx and 501 are the denials it writes itself.
+    if 200 <= status < 400:
+        return 'allow'
+    return 'deny'
+
+
+def gateway_target(url: str) -> tuple[str, str]:
+    # The gateway splits the decoded URL path on the first slash. Bucket-level
+    # calls and ListBuckets leave the key empty.
+    path = unquote(urlsplit(url).path).removeprefix('/')
+    bucket, _sep, key = path.partition('/')
+    return bucket, key
+
+
+def record_observed(method: str, url: str, status: int) -> None:
+    bucket, key = gateway_target(url)
+    LEDGER.append((method, bucket, key, str(status), observed_decision(status)))
+
+
+def watch_client(client) -> None:
+    pending: list = []
+
+    def before_send(request, **_kwargs):
+        pending.append(request)
+
+    def on_response(**kwargs):
+        request = pending.pop(0) if pending else None
+        if request is None or kwargs.get('exception') is not None:
+            return
+        response_dict = kwargs.get('response_dict')
+        if not isinstance(response_dict, dict):
+            return
+        status = response_dict.get('status_code')
+        if not isinstance(status, int):
+            return
+        record_observed(getattr(request, 'method', '') or '', getattr(request, 'url', '') or '', status)
+
+    client.meta.events.register('before-send.s3', before_send)
+    client.meta.events.register('response-received.s3', on_response)
+
+
+def audit_coverage(ledger, rows, started: datetime) -> list:
+    """Ledger entries that have no distinct gateway.request row since `started`."""
+    pool = []
+    for row in rows:
+        if not isinstance(row, dict) or row.get('action') != 'gateway.request':
+            continue
+        if not written_since(row, started):
+            continue
+        parsed = detail_map(str(row.get('detail') or ''))
+        pool.append((
+            parsed.get('method', ''),
+            row.get('bucket') or '',
+            row.get('object_key') or '',
+            parsed.get('status', ''),
+            parsed.get('decision', ''),
+        ))
+    missing = []
+    for event in ledger:
+        try:
+            pool.remove(event)
+        except ValueError:
+            missing.append(event)
+    return missing
+
+
+def issue_tally(kids: set[str], rows) -> tuple[int, int, bool]:
+    """credential.issue rows for kids this run issued. Each kid needs exactly one."""
+    wanted = {kid for kid in kids if kid}
+    counts = dict.fromkeys(wanted, 0)
+    for row in rows:
+        if not isinstance(row, dict) or row.get('action') != 'credential.issue':
+            continue
+        kid = detail_map(str(row.get('detail') or '')).get('kid', '')
+        if kid in counts:
+            counts[kid] += 1
+    matched = sum(counts.values())
+    ok = all(count == 1 for count in counts.values()) and matched == len(wanted)
+    return matched, len(wanted), ok
+
+
 def fetch_audit(console: Console) -> tuple[int, list]:
     items: list = []
     offset = 0
-    while offset < 2000:
+    while True:
         status, raw = console.call('GET', f'/api/audit?limit=200&offset={offset}', csrf=False)
         if status != 200:
             return status, items
@@ -312,6 +404,33 @@ def fetch_audit(console: Console) -> tuple[int, list]:
         if len(batch) < 200 or offset >= total:
             break
     return 200, items
+
+
+def report_audit(report: Report, console: Console, kids: set[str], started: datetime) -> None:
+    deadline = time.monotonic() + 20
+    audit_status = 0
+    missing = list(LEDGER)
+    matched = 0
+    issued = len({kid for kid in kids if kid})
+    issues_ok = False
+    while True:
+        audit_status, rows = fetch_audit(console)
+        if audit_status == 200:
+            missing = audit_coverage(LEDGER, rows, started)
+            matched, issued, issues_ok = issue_tally(kids, rows)
+            if not missing and issues_ok:
+                break
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(0.5)
+    sample = '; '.join(
+        f'{method} bucket={bucket} key={key} status={status}'
+        for method, bucket, key, status, _decision in missing[:3]
+    )
+    observed = f'status={audit_status} missing={len(missing)} issue={matched}/{issued}'
+    if sample:
+        observed = f'{observed} {sample}'
+    report.ok('audit-gateway-and-issue', observed, audit_status == 200 and not missing and issues_ok)
 
 
 def run(report: Report) -> None:
@@ -341,8 +460,10 @@ def run(report: Report) -> None:
     seed_key = prefix + 'a.txt'
     seed = b'gateway-e2e-seed\n'
     kids: set[str] = set()
+    LEDGER.clear()
     master = s3_client(s3_url, master_access, master_secret)
     console = Console(console_url)
+    expect_audit = False
 
     def issue(mode: str, ttl: int | None) -> tuple[int, dict]:
         body = {'bucket': bucket, 'prefix': prefix, 'mode': mode}
@@ -533,46 +654,15 @@ def run(report: Report) -> None:
                 exc.close()
             except urllib.error.URLError as exc:
                 fetch_status = str(exc.reason)
+            if isinstance(fetch_status, int):
+                record_observed('GET', url, fetch_status)
         report.ok(
             'presigned-download',
             f'issue={status} fetch={fetch_status} host={host} bytes={len(fetched)}',
             status == 200 and fetch_status == 200 and fetched == seed,
         )
 
-        deadline = time.monotonic() + 10
-        allow = deny = issued_rows = 0
-        audit_status = None
-        while True:
-            audit_status, rows = fetch_audit(console)
-            allow = deny = issued_rows = 0
-            if audit_status == 200:
-                for row in rows:
-                    action = row.get('action')
-                    parsed = detail_map(str(row.get('detail') or ''))
-                    kid = parsed.get('kid', '')
-                    if action == 'credential.issue' and (row.get('object_key') == prefix or kid in kids):
-                        issued_rows += 1
-                    if action == 'gateway.request' and kid in kids:
-                        decision = parsed.get('decision', '')
-                        if decision == 'allow' or decision.startswith('allow'):
-                            allow += 1
-                    if (
-                        action == 'gateway.request'
-                        and written_since(row, started)
-                        and parsed.get('decision') == 'deny'
-                        and parsed.get('status') == '403'
-                    ):
-                        deny += 1
-            if audit_status == 200 and allow >= 1 and deny >= 1 and issued_rows >= 1:
-                break
-            if time.monotonic() >= deadline:
-                break
-            time.sleep(0.5)
-        report.ok(
-            'audit-gateway-and-issue',
-            f'status={audit_status} allow={allow} deny={deny} issue={issued_rows}',
-            audit_status == 200 and allow >= 1 and deny >= 1 and issued_rows >= 1,
-        )
+        expect_audit = True
     finally:
         error = None
         try:
@@ -580,11 +670,49 @@ def run(report: Report) -> None:
         except BotoCoreError as exc:
             error = type(exc).__name__
         report.ok('cleanup', 'deleted prefix' if error is None else error, error is None)
+        if expect_audit:
+            report_audit(report, console, kids, started)
+
+
+def self_test() -> int:
+    started = datetime(2026, 11, 15, tzinfo=UTC)
+    later = '2026-11-15T00:00:01+00:00'
+
+    def row(method, bucket, key, status, decision, ts=later):
+        return {
+            'ts': ts,
+            'action': 'gateway.request',
+            'bucket': bucket,
+            'object_key': key,
+            'detail': f'method={method} bytes=0 kid= decision={decision} status={status}',
+        }
+
+    one = [('GET', 'b', 'k', '200', 'allow')]
+    covered = [row('GET', 'b', 'k', '200', 'allow')]
+    checks = (
+        ('full coverage', audit_coverage(one, covered, started) == []),
+        ('missing row', len(audit_coverage(one, [], started)) == 1),
+        ('wrong status', len(audit_coverage(one, [row('GET', 'b', 'k', '403', 'allow')], started)) == 1),
+        ('twice needs two rows', len(audit_coverage(one + one, covered, started)) == 1),
+        ('extra rows ignored', audit_coverage(one, covered + [
+            row('PUT', 'other', 'z', '201', 'allow'),
+            row('GET', 'b', 'k', '200', 'allow', ts='2020-01-01T00:00:00+00:00'),
+        ], started) == []),
+    )
+    failed = [name for name, ok in checks if not ok]
+    if failed:
+        print('self-test failed: ' + ', '.join(failed), flush=True)
+        return 1
+    print('self-test passed', flush=True)
+    return 0
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.parse_args()
+    parser.add_argument('--self-test', action='store_true', help=argparse.SUPPRESS)
+    args = parser.parse_args()
+    if args.self_test:
+        raise SystemExit(self_test())
     report = Report()
     run(report)
     raise SystemExit(report.finish())
