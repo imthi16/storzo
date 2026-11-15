@@ -1,7 +1,7 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Activity, ArrowDown, ArrowDownToLine, ArrowUp, ChevronRight, Copy, Database, LayoutDashboard, LogOut, Menu, RefreshCw, Settings, X } from 'lucide-react';
 import type { Session, Bucket, Obj, Listing, Stats, SortKey, Preview, Audit, Page, ActivityPage, UploadItem, DialogState } from './types';
-import { plural, enc, bytes, isImage, shortName, folderOf, when, bucketNameError } from './lib/format';
+import { plural, enc, bytes, isImage, shortName, folderOf, when, bucketNameError, activityFilterQuery, activityFiltersFromHash, auditListQuery, type AuditDecision, type AuditSource } from './lib/format';
 import { pageFromHash, hashFor } from './lib/routes';
 import { ApiError, call } from './api/client';
 import { postUpload } from './api/upload';
@@ -46,6 +46,9 @@ export function App() {
   const [uploadCounts, setUploadCounts] = useState<{day: string; count: number}[]>([]);
   const [activity, setActivity] = useState<ActivityPage | null>(null);
   const [activityOffset, setActivityOffset] = useState(0);
+  const initialActivityFilters = activityFiltersFromHash(location.hash);
+  const [activitySource, setActivitySource] = useState<AuditSource>(initialActivityFilters.source);
+  const [activityDecision, setActivityDecision] = useState<AuditDecision>(initialActivityFilters.decision);
   const [entry, setEntry] = useState<Audit | null>(null);
   const [entryError, setEntryError] = useState('');
   const [pager, setPager] = useState<{index: number; tokens: string[]}>({index: 0, tokens: ['']});
@@ -95,7 +98,9 @@ export function App() {
   const reloadBuckets = async () => { const d = await call<{items: Bucket[]}>('/buckets'); setBuckets(d.items); };
   const reloadStats = async () => { const d = await call<Stats>('/dashboard'); setStats(d); setStatsAt(Date.now()); };
   const reloadAudit = async () => { const d = await call<{items: {day: string; count: number}[]}>('/audit/uploads-by-day?days=14'); setUploadCounts(d.items); };
-  const reloadActivity = async (offset = activityOffset) => { const d = await call<ActivityPage>(`/audit?limit=${pageSize}&offset=${offset}`); setActivity(d); };
+  const reloadActivity = async (offset = activityOffset) => { const d = await call<ActivityPage>(`/audit?${auditListQuery({limit: pageSize, offset, source: activitySource, decision: activityDecision})}`); setActivity(d); };
+  const setActivitySourceFilter = (source: AuditSource) => { setActivitySource(source); setActivityOffset(0); };
+  const setActivityDecisionFilter = (decision: AuditDecision) => { setActivityDecision(decision); setActivityOffset(0); };
   const reloadObjects = async (bucket = selected, path = prefix, token = pager.tokens[pager.index] ?? '') => {
     if (!bucket || bucket !== objectLocation.current.bucket || path !== objectLocation.current.prefix) return;
     const request = ++listingRequest.current;
@@ -143,9 +148,27 @@ export function App() {
   };
 
   useEffect(() => { call<Session>('/auth/me').then(setSession).catch(() => setSession(null)).finally(() => setBooting(false)); }, []);
-  useEffect(() => { const h = hashFor(page, activityId); if (location.hash !== h) location.hash = h; }, [page, activityId]);
-  useEffect(() => { const on = () => { const r = pageFromHash(); setPage(r.page); setActivityId(r.id); }; window.addEventListener('hashchange', on); return () => window.removeEventListener('hashchange', on); }, []);
-  useEffect(() => { if (!session || page !== 'activity') return; reloadActivity().catch(fail); }, [session, page, activityOffset, pageSize]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    const base = hashFor(page, activityId);
+    const q = page === 'activity' ? activityFilterQuery(activitySource, activityDecision) : '';
+    const h = q ? `${base}/?${q}` : base;
+    if (location.hash !== h) location.hash = h;
+  }, [page, activityId, activitySource, activityDecision]);
+  useEffect(() => {
+    const on = () => {
+      const r = pageFromHash();
+      setPage(r.page);
+      setActivityId(r.id);
+      if (r.page === 'activity') {
+        const f = activityFiltersFromHash(location.hash);
+        setActivitySource(f.source);
+        setActivityDecision(f.decision);
+      }
+    };
+    window.addEventListener('hashchange', on);
+    return () => window.removeEventListener('hashchange', on);
+  }, []);
+  useEffect(() => { if (!session || page !== 'activity') return; reloadActivity().catch(fail); }, [session, page, activityOffset, pageSize, activitySource, activityDecision]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!session || page !== 'activity-detail' || !activityId) return;
     let live = true; setEntry(null); setEntryError('');
@@ -327,6 +350,7 @@ export function App() {
   if (!session) return <LoginPage login={login} username={username} setUsername={setUsername} password={password} setPassword={setPassword} loginBusy={loginBusy} notice={notice}/>;
 
   return <div className="shell">
+    <a className="skip-link" href="#main-content">Skip to content</a>
     <aside className={`sidebar ${menuOpen?'expanded':''}`}>
       <div className="brand"><div className="brand-icon"><Database size={22}/></div><div><strong>Storzo</strong><small>STORAGE CONSOLE</small></div></div>
       
@@ -338,12 +362,12 @@ export function App() {
       </nav>
       <div className="side-bottom"><div className="infra-tag"><span className={`pulse ${ready}`}/>{ready==='online'?'Storage connected':ready==='offline'?'Storage unavailable':'Checking storage'}</div><div className="side-user"><div className="avatar">{session.username.charAt(0).toUpperCase()}</div><div><strong>{session.username}</strong><small>Administrator</small></div><button onClick={logout} title="Sign out" aria-label="Sign out" className="icon-btn"><LogOut size={17}/></button></div></div>
     </aside>
-    <main className="content">
+    <main id="main-content" tabIndex={-1} className="content">
       <header className="topbar"><button className="mobile-toggle icon-btn" aria-label="Toggle navigation menu" onClick={()=>setMenuOpen(!menuOpen)}><Menu/></button><nav className="breadcrumbs" aria-label="Breadcrumb"><button className="crumb crumb-root" onClick={()=>nav('dashboard')}>Workspace</button><ChevronRight size={15} className="crumb-root"/>{page==='activity-detail'?<><button className="crumb" onClick={()=>nav('activity')}>Activity log</button><ChevronRight size={15}/><strong aria-current="page">Event #{activityId}</strong></>:<strong aria-current="page">{page==='dashboard'?'Overview':page==='buckets'?'Buckets & objects':page==='activity'?'Activity log':'Settings'}</strong>}</nav><div className="top-actions"><button className="secondary compact" onClick={refresh} disabled={busy}><RefreshCw size={16} className={busy?'spin':''}/> Refresh</button></div></header>
       <div className="page-body">
       {page==='dashboard' && <OverviewPage stats={stats} updatedAgo={updatedAgo} uploadDays={uploadDays} ready={ready} barPage={barPage} setBarPage={setBarPage} pageSize={pageSize} changePageSize={changePageSize} openBucket={openBucket} openPreview={openPreview} nav={nav}/>}
       {page==='buckets' && <BucketsPage createBucket={createBucket} buckets={buckets} bucketFilter={bucketFilter} setBucketFilter={setBucketFilter} selected={selected} openBucket={openBucket} onDragEnter={onDragEnter} onDragOverPanel={onDragOverPanel} onDragLeave={onDragLeave} onDropFiles={onDropFiles} dragging={dragging} prefix={prefix} setPrefix={setPrefix} fileInput={fileInput} upload={upload} deleteBucket={deleteBucket} busy={busy} search={search} setSearch={setSearch} typeFilter={typeFilter} setTypeFilter={setTypeFilter} view={view} setViewPersist={setViewPersist} checked={checked} setChecked={setChecked} checkedBytes={checkedBytes} deleteSelected={deleteSelected} toggleCheck={toggleCheck} uploads={uploads} setUploads={setUploads} retryUpload={retryUpload} failedCount={failedCount} retryFailed={retryFailed} listing={listing} list={list} filtered={filtered} openPreview={openPreview} linkFile={linkFile} deleteFile={deleteFile} sortLabel={sortLabel} clickSort={clickSort} sortArrow={sortArrow} pageSize={pageSize} changePageSize={changePageSize} pager={pager} goPrevObjects={goPrevObjects} navigating={navigating} goNextObjects={goNextObjects}/>}
-      {page==='activity' && <ActivityListPage activity={activity} pageSize={pageSize} changePageSize={changePageSize} setActivityOffset={setActivityOffset} openActivity={openActivity} reloadActivity={reloadActivity} fail={fail}/>}
+      {page==='activity' && <ActivityListPage activity={activity} pageSize={pageSize} changePageSize={changePageSize} setActivityOffset={setActivityOffset} openActivity={openActivity} reloadActivity={reloadActivity} fail={fail} source={activitySource} decision={activityDecision} setSource={setActivitySourceFilter} setDecision={setActivityDecisionFilter}/>}
       {page==='activity-detail' && <ActivityEventPage entry={entry} entryError={entryError} activityId={activityId} nav={nav} openLocation={openLocation}/>}
       {page==='settings' && <SettingsPage ready={ready}/>}
       </div>

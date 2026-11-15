@@ -1,5 +1,8 @@
-import { describe, expect, it } from 'vitest';
-import { bucketNameError, bytes, folderOf, isImage, plural, shortName } from './format';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { activityFilterQuery, activityFiltersFromHash, auditListQuery, bucketNameError, bytes, folderOf, isImage, parseGatewayDetail, plural, shortName, when } from './format';
+import { pageFromHash } from './routes';
+
+afterEach(() => vi.unstubAllGlobals());
 
 describe('bytes', () => {
   it.each([
@@ -31,6 +34,52 @@ describe('object keys', () => {
   it('isImage is case-insensitive and extension-only', () => {
     expect(isImage('x.JPG')).toBe(true);
     expect(isImage('x.png.txt')).toBe(false);
+  });
+});
+
+describe('when', () => {
+  it('uses a locale-independent 24-hour local timestamp', () => {
+    const local = new Date(2026, 10, 15, 17, 14, 20);
+    expect(when(local.toISOString())).toBe('2026-11-15 17:14:20');
+  });
+  it('uses an em dash for empty or unparseable input', () => {
+    expect(when('')).toBe('—');
+    expect(when('not-a-date')).toBe('—');
+  });
+});
+
+describe('parseGatewayDetail', () => {
+  it('parses an allow row and an empty-kid denial', () => {
+    expect(parseGatewayDetail('method=PUT bytes=12 kid=STZAAAAAAAAAAAAAAAA decision=allow status=200')).toEqual({
+      method: 'PUT', bytes: 12, kid: 'STZAAAAAAAAAAAAAAAA', decision: 'allow', status: 200,
+    });
+    expect(parseGatewayDetail('method=GET bytes=0 kid= decision=deny status=403')).toEqual({
+      method: 'GET', bytes: 0, kid: '', decision: 'deny', status: 403,
+    });
+  });
+  it('returns null for malformed detail and does not throw', () => {
+    expect(parseGatewayDetail(null)).toBeNull();
+    expect(parseGatewayDetail('')).toBeNull();
+    expect(parseGatewayDetail('not a detail')).toBeNull();
+    expect(parseGatewayDetail('method=GET bytes=no kid= decision=deny status=403')).toBeNull();
+    expect(parseGatewayDetail('method=GET bytes=1 kid=x decision=maybe status=200')).toBeNull();
+    expect(() => parseGatewayDetail('= = =')).not.toThrow();
+  });
+});
+
+describe('audit list query', () => {
+  it('sends source and only sends decision for a gateway allow or deny', () => {
+    expect(auditListQuery({limit: 10, offset: 0, source: 'all', decision: 'all'})).toBe('limit=10&offset=0&source=all');
+    expect(auditListQuery({limit: 10, offset: 20, source: 'console', decision: 'deny'})).toBe('limit=10&offset=20&source=console');
+    expect(auditListQuery({limit: 25, offset: 0, source: 'gateway', decision: 'deny'})).toBe('limit=25&offset=0&source=gateway&decision=deny');
+  });
+  it('keeps non-default filters in a hash query that pageFromHash still reads as activity', () => {
+    expect(activityFilterQuery('all', 'deny')).toBe('');
+    expect(activityFilterQuery('gateway', 'allow')).toBe('source=gateway&decision=allow');
+    expect(activityFiltersFromHash('#/activity/?source=gateway&decision=deny')).toEqual({source: 'gateway', decision: 'deny'});
+    expect(activityFiltersFromHash('#/activity')).toEqual({source: 'all', decision: 'all'});
+    vi.stubGlobal('location', {hash: '#/activity/?source=gateway&decision=allow'});
+    expect(pageFromHash()).toEqual({page: 'activity', id: null});
   });
 });
 
