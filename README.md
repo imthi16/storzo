@@ -185,7 +185,7 @@ s3.get_object(Bucket="demo-images", Key="run-42/a.txt")   # 200
 s3.get_object(Bucket="demo-images", Key="run-43/a.txt")   # 403 AccessDenied
 ```
 
-To try the MCP server, build it with Go 1.25+ and pass the issued values as environment variables:
+To try the MCP server, build it with Go 1.26.11+ and pass the issued values as environment variables:
 
 ```bash
 cd gateway && go build -o storzo-mcp ./cmd/storzo-mcp
