@@ -3,9 +3,11 @@ package main
 import (
 	"context"
 	"fmt"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -27,10 +29,15 @@ func testConfig(endpoint, mode string) Config {
 }
 
 // fakeS3 returns an httptest server speaking just enough path-style S3 for
-// list/get/put/delete. GET on /test-bucket/big.bin returns 2 MiB; other GET
-// object keys return "hello". ListObjectsV2 returns one key.
+// list/get/put/delete, including 2/3/4 MiB text fixtures and small binary objects.
+// Ordinary object keys return "hello". ListObjectsV2 returns one key.
 // protects=fake data plane; fails_when=XML shape or routing is wrong (SDK parse errors); no_claim=does not prove gateway scope enforcement.
 func fakeS3(t *testing.T) *httptest.Server {
+	t.Helper()
+	return fakeS3WithGetCounter(t, nil)
+}
+
+func fakeS3WithGetCounter(t *testing.T, getCalls *atomic.Int64) *httptest.Server {
 	t.Helper()
 	big := strings.Repeat("x", 2*1048576)
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -56,6 +63,19 @@ func fakeS3(t *testing.T) *httptest.Server {
 		}
 		switch r.Method {
 		case http.MethodGet:
+			if getCalls != nil {
+				getCalls.Add(1)
+			}
+			if strings.HasSuffix(r.URL.Path, "/three-mib.txt") || strings.HasSuffix(r.URL.Path, "/four-mib.txt") {
+				size := 3 * 1024 * 1024
+				if strings.HasSuffix(r.URL.Path, "/four-mib.txt") {
+					size = 4 * 1024 * 1024
+				}
+				w.Header().Set("Content-Type", "text/plain")
+				w.Header().Set("Content-Length", fmt.Sprint(size))
+				fmt.Fprint(w, strings.Repeat("t", size))
+				return
+			}
 			if strings.HasSuffix(r.URL.Path, "/big.bin") {
 				w.Header().Set("Content-Type", "text/plain")
 				w.Header().Set("Content-Length", fmt.Sprint(len(big)))
@@ -391,5 +411,73 @@ func TestGetObjectTextStillInline(t *testing.T) {
 	text, isErr, errText = callToolText(t, context.Background(), session, "get_object", map[string]any{"key": "run-42/tabs.txt"})
 	if isErr || errText != "" || !strings.Contains(text, "\t") || !strings.Contains(text, "\n") {
 		t.Fatalf("tabs/newlines text: isErr=%v err=%q text=%q", isErr, errText, text)
+	}
+}
+
+// protects=get_object rejects invalid limits before S3, preserves the 1 MiB default,
+// and allows text up to the 4 MiB ceiling;
+// fails_when=an invalid limit makes a GetObject request or succeeds (including overflow),
+// a default read inlines 2 MiB, or a permitted 3/4 MiB body is truncated;
+// no_claim=process-wide memory bounds across concurrent calls or real SeaweedFS behavior.
+func TestGetObjectMaxBytesBounds(t *testing.T) {
+	var calls atomic.Int64
+	fake := fakeS3WithGetCounter(t, &calls)
+	defer fake.Close()
+	cfg := testConfig(fake.URL, "ro")
+	a := &app{cfg: cfg, s3: newS3Client(cfg)}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	session := connectPair(t, ctx, buildServer(a))
+	defer session.Close()
+	for _, tc := range []struct {
+		name, key string
+		maxBytes  int64
+		omitLimit bool
+		wantBytes int
+		wantError string
+		wantCalls int64
+	}{
+		{name: "at-ceiling", key: "four-mib.txt", maxBytes: 4 * 1024 * 1024, wantBytes: 4 * 1024 * 1024, wantCalls: 1},
+		{name: "three-mib-inline", key: "three-mib.txt", maxBytes: 4 * 1024 * 1024, wantBytes: 3 * 1024 * 1024, wantCalls: 1},
+		{name: "one-above-ceiling", key: "a.txt", maxBytes: 4*1024*1024 + 1, wantError: "max_bytes", wantCalls: 0},
+		{name: "negative", key: "a.txt", maxBytes: -1, wantError: "max_bytes", wantCalls: 0},
+		{name: "two-gib", key: "a.txt", maxBytes: 2147483648, wantError: "max_bytes", wantCalls: 0},
+		{name: "max-int64", key: "a.txt", maxBytes: math.MaxInt64, wantError: "max_bytes", wantCalls: 0},
+		{name: "near-max-int64", key: "a.txt", maxBytes: math.MaxInt64 - 1, wantError: "max_bytes", wantCalls: 0},
+		{name: "default-omitted", key: "big.bin", omitLimit: true, wantError: "too_large", wantCalls: 1},
+		{name: "default-zero", key: "big.bin", maxBytes: 0, wantError: "too_large", wantCalls: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			args := map[string]any{"key": "run-42/" + tc.key}
+			if !tc.omitLimit {
+				args["max_bytes"] = tc.maxBytes
+			}
+			if tc.wantError == "max_bytes" {
+				// Test the handler too: MCP decoding may reject huge integers first.
+				before := calls.Load()
+				result, _, err := a.getObject(ctx, nil, getObjectArgs{Key: "run-42/" + tc.key, MaxBytes: tc.maxBytes})
+				if err == nil || result != nil || !strings.Contains(err.Error(), "max_bytes") || !strings.Contains(err.Error(), "4194304") {
+					t.Fatalf("handler must reject invalid limit with ceiling: result=%v err=%v", result, err)
+				}
+				if got := calls.Load() - before; got != 0 {
+					t.Fatalf("invalid limit reached S3: calls=%d", got)
+				}
+			}
+			before := calls.Load()
+			text, isErr, errText := callToolText(t, ctx, session, "get_object", args)
+			if got := calls.Load() - before; got != tc.wantCalls {
+				t.Errorf("GetObject calls=%d, want %d", got, tc.wantCalls)
+			}
+			if tc.wantError != "" {
+				if !isErr && errText == "" {
+					t.Fatalf("expected %s error, got success with %d bytes", tc.wantError, len(text))
+				}
+				if !strings.Contains(text+errText, tc.wantError) {
+					t.Fatalf("expected %s error, got text=%q err=%q", tc.wantError, text, errText)
+				}
+			} else if isErr || errText != "" || text != strings.Repeat("t", tc.wantBytes) {
+				t.Fatalf("inline result: isErr=%v err=%q bytes=%d, want %d", isErr, errText, len(text), tc.wantBytes)
+			}
+		})
 	}
 }
