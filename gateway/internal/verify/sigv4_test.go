@@ -256,3 +256,49 @@ func TestRequestMetadataPreserved(t *testing.T) {
 		t.Fatal("body changed")
 	}
 }
+
+// presignQueryPayload signs like signedRequest, with the payload hash only in the query.
+func presignQueryPayload(t *testing.T, v *Verifier, token, kid, method, path, body, payload string, now time.Time) *http.Request {
+	t.Helper()
+	r := httptest.NewRequest(method, "https://s3.example.test"+path, strings.NewReader(body))
+	q := r.URL.Query()
+	q.Set("X-Amz-Expires", "300")
+	q.Set("X-Amz-Content-Sha256", payload)
+	r.URL.RawQuery = q.Encode()
+	creds := aws.Credentials{AccessKeyID: kid, SecretAccessKey: v.Secret(kid), SessionToken: token}
+	signer := v4.NewSigner(func(o *v4.SignerOptions) { o.DisableURIPathEscaping = true; o.DisableHeaderHoisting = true })
+	signed, _, err := signer.PresignHTTP(r.Context(), creds, r, payload, "s3", "us-east-1", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.URL, err = url.Parse(signed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Header.Get("X-Amz-Content-Sha256") != "" || r.URL.Query().Get("X-Amz-Content-Sha256") != payload {
+		t.Fatalf("payload hash was not kept only in the query: header %q query %q", r.Header.Get("X-Amz-Content-Sha256"), r.URL.RawQuery)
+	}
+	return r
+}
+
+// protects=presigned GET whose payload hash is a query parameter, inside scope;
+// fails_when=a valid query hash is denied or a wrong hash is accepted;
+// no_claim=header-carried hashes, which the other payload tests cover.
+func TestPresignedQueryContentHash(t *testing.T) {
+	f := loadFixture(t)
+	v, _ := New(f.SigningKey)
+	vec := f.Vectors[0]
+	now := time.Unix(f.Now, 0)
+	sum := sha256.Sum256(nil)
+	hash := hex.EncodeToString(sum[:])
+	r := presignQueryPayload(t, v, vec.Token, vec.AccessKey, "GET", "/agent-data/run-42/a", "", hash, now)
+	c, err := v.Verify(r, now)
+	if err != nil || c != vec.Claims {
+		t.Fatalf("presigned query hash: %v", err)
+	}
+	q := r.URL.Query()
+	q.Set("X-Amz-Content-Sha256", strings.Repeat("0", 64))
+	r.URL.RawQuery = q.Encode()
+	_, err = v.Verify(r, now)
+	requireCode(t, err, "SignatureDoesNotMatch")
+}

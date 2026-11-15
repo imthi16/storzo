@@ -41,7 +41,7 @@ func Scope(r *http.Request, c Claims) error {
 		if r.Method == http.MethodGet && q.Get("list-type") == "2" {
 			for name := range q {
 				switch name {
-				case "list-type", "prefix", "delimiter", "max-keys", "continuation-token", "start-after", "encoding-type", "fetch-owner", "x-id", "X-Amz-Algorithm", "X-Amz-Credential", "X-Amz-Date", "X-Amz-Expires", "X-Amz-SignedHeaders", "X-Amz-Signature", "X-Amz-Security-Token":
+				case "list-type", "prefix", "delimiter", "max-keys", "continuation-token", "start-after", "encoding-type", "fetch-owner", "x-id", "X-Amz-Algorithm", "X-Amz-Credential", "X-Amz-Date", "X-Amz-Expires", "X-Amz-SignedHeaders", "X-Amz-Signature", "X-Amz-Security-Token", "X-Amz-Content-Sha256":
 				default:
 					return denied("Unsupported bucket operation.")
 				}
@@ -68,7 +68,7 @@ func Scope(r *http.Request, c Claims) error {
 	// Object subresources such as ACL/policy/versioning never become writes.
 	for name := range q {
 		switch name {
-		case "uploadId", "partNumber", "uploads", "x-id", "response-cache-control", "response-content-disposition", "response-content-encoding", "response-content-language", "response-content-type", "response-expires", "X-Amz-Algorithm", "X-Amz-Credential", "X-Amz-Date", "X-Amz-Expires", "X-Amz-SignedHeaders", "X-Amz-Signature", "X-Amz-Security-Token":
+		case "uploadId", "partNumber", "uploads", "x-id", "response-cache-control", "response-content-disposition", "response-content-encoding", "response-content-language", "response-content-type", "response-expires", "X-Amz-Algorithm", "X-Amz-Credential", "X-Amz-Date", "X-Amz-Expires", "X-Amz-SignedHeaders", "X-Amz-Signature", "X-Amz-Security-Token", "X-Amz-Content-Sha256":
 		default:
 			return denied("Unsupported object operation.")
 		}
