@@ -22,7 +22,8 @@ router = APIRouter(prefix='/api/internal', tags=['internal'])
 
 MAX_EVENTS = 500
 MAX_SKEW_SECONDS = 300
-_TIMESTAMP = re.compile(r'-?[0-9]+')
+# 12 digits max: int() raises ValueError past ~4300 digits, which would be a 500.
+_TIMESTAMP = re.compile(r'[0-9]{1,12}')
 
 
 class AuditEvent(BaseModel):

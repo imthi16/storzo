@@ -145,6 +145,17 @@ def test_missing_or_garbage_timestamp_is_401(client, stamp):
     assert _gateway_rows() == []
 
 
+def test_oversized_timestamp_is_401(client):
+    """protects=a timestamp longer than 12 digits is rejected before int(); fails_when=a 5000-digit timestamp returns 500 or writes a row; no_claim=a 12-digit timestamp inside the window is rejected."""
+    body = _body([_event()])
+    stamp = '1' * 5000
+    digest = hmac.new(KEY.encode(), stamp.encode() + b'.' + body, hashlib.sha256).hexdigest()
+    headers = {'x-storzo-timestamp': stamp, 'x-storzo-signature': digest, 'content-type': 'application/json'}
+    response = client.post('/api/internal/audit', content=body, headers=headers)
+    assert response.status_code == 401
+    assert _gateway_rows() == []
+
+
 def test_body_only_signature_is_rejected(client):
     """protects=signature covers the timestamp prefix plus the body; fails_when=the previous body-only HMAC is accepted; no_claim=a timestamp-prefixed signature of a tampered body succeeds."""
     body = _body([_event()])
