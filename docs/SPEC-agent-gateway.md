@@ -214,7 +214,7 @@ Verified on Docker Compose with `scripts/gateway_e2e.py` (35 checks) unless note
 | 7 | `..` and `%2e%2e` give 400 and never reach SeaweedFS | 400 verified end to end; "zero upstream calls" asserted in the proxy unit tests |
 | 8 | Bucket-level calls 403 for every agent key | Verified |
 | 9 | SeaweedFS not reachable from the host except through the gateway | Verified by hand in Compose (`storage` publishes no port). Not in the script. Not true in Kubernetes without a NetworkPolicy |
-| 10 | Every issue and every request audited with kid, decision, status | Verified by a per-request ledger. Denied requests carry an empty `kid` (see below) |
+| 10 | Every issue and every request audited with kid, decision, status | Verified by a per-request ledger. The `kid` is recorded for allowed requests and for authenticated denials; it is empty when authentication failed (see below) |
 | 11 | MCP `ro` has no `put_object`/`delete_object`; the S3 op still returns 403 | `tools/list` covered by MCP unit tests; the 403 by the e2e `ro` PUT. A test running the MCP server through the real proxy handler was not written |
 | 12 | Each test states protects / fails_when / no_claim | Applied to the tests added for this work; older tests were not audited |
 | 13 | Existing backend tests, frontend build and Playwright pass unchanged | Backend and frontend lint/test/build pass in CI. The Playwright specs were not run |
@@ -222,7 +222,7 @@ Verified on Docker Compose with `scripts/gateway_e2e.py` (35 checks) unless note
 Where the implementation differs from the text above:
 
 - **Audit contract.** `x-storzo-signature` is HMAC-SHA256 over `<timestamp>.<body>` with `x-storzo-timestamp`, accepted within 300 s, body capped at 4 MiB, field limits enforced. `AUDIT_URL` is a required gateway setting.
-- **Denied requests have an empty `kid`**, including requests that were correctly signed and denied by scope: the verifier returns no claims on any error, so the audit event carries only the kid of allowed requests. (An earlier note blamed unauthenticated callers; that was wrong, and the console now shows "not recorded".) Criterion 10 is met for decision and status, not for kid on denials. Recording the kid of an authenticated but out-of-scope request would need the verifier to return the claims together with the scope error; not done.
+- **The audit `kid` comes only from authenticated claims.** `Verify` returns the claims together with the error when a request was authenticated and then denied (scope denial, master CopyObject), and returns empty claims on every authentication failure (forged or wrong signature, tampered, malformed or expired token, payload hash mismatch, ...). The audit event therefore carries the kid of allowed requests and of authenticated denials, and an empty `kid` only when authentication failed. Events recorded before this change have an empty `kid` on scope denials too. Criterion 10 is met in full for new events. (An earlier version of this note blamed unauthenticated callers for every empty kid, and an intermediate version said denials never carried one; both were wrong.)
 - **Header allowlist.** Scoped requests forward only `x-amz-meta-*`, checksum headers and the verified payload hash; ACL/grant headers are removed for all requests, including the master key's.
 - **Credential rules added:** the prefix must end in `/`; header-signed requests must sign `x-amz-security-token`.
 - **Go version.** The Docker image and `go.mod` use Go 1.26.11 because several standard-library CVEs have no fix in 1.25.

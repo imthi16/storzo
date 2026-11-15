@@ -199,7 +199,7 @@ Limits to know before relying on it:
 
 - No revoke before expiry. The kill switch is rotating `CRED_SIGNING_KEY` and restarting the backend and gateway.
 - Tested with boto3 over plain HTTP. SDK uploads that use `aws-chunked` streaming get 501 (which SDK defaults do this was not tested). AWS CLI, HTTPS and load were not tested.
-- Audit is best effort: a queue of 10,000 events, 4 attempts per batch, no disk spool. For gateway requests the `kid` is stored only for allowed requests; every denied request, including a correctly signed one denied by scope, is logged with an empty `kid`, so the console shows "not recorded".
+- Audit is best effort: a queue of 10,000 events, 4 attempts per batch, no disk spool. For gateway requests the `kid` is stored for every request whose signature the gateway verified, including requests denied by scope; it is empty only when authentication failed (wrong secret, bad or expired token, malformed request) and in events recorded before this was added, and the console then shows "not recorded".
 - The audit endpoint accepts a replay inside its 5-minute window.
 - Reviewed by automated tests, mutation checks and cross-review by other AI agents (10 findings fixed; one Kubernetes concern is still open). There has been no human or third-party security review.
 

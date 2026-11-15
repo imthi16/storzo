@@ -33,7 +33,7 @@
 ## Known limitations
 
 - Single admin account only; no password rotation UI or OIDC/MFA.
-- Gateway requests (allowed and denied) are written to the SQLite audit trail by best-effort batches; the `kid` is stored only for allowed requests; every denied request, including a correctly signed one denied by scope, is logged with an empty `kid`, so the console shows "not recorded". Access that bypasses the gateway (Kubernetes without NetworkPolicy, or direct access to storage) is not logged.
+- Gateway requests (allowed and denied) are written to the SQLite audit trail by best-effort batches; the `kid` is stored for every request whose signature the gateway verified, including requests denied by scope; it is empty only when authentication failed (wrong secret, bad or expired token, malformed request) and in events recorded before this was added, and the console then shows "not recorded". Access that bypasses the gateway (Kubernetes without NetworkPolicy, or direct access to storage) is not logged.
 - Master-key applications pass through the gateway without scope checks; ACL and grant headers are stripped for them too.
 - `aws-chunked` streaming uploads and CopyObject return 501 through the gateway.
 - Backend upload hashes data before pushing it, but full integrity and durability are not proven until read-back and restore testing.
