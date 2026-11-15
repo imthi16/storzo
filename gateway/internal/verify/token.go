@@ -75,7 +75,7 @@ func (v *Verifier) Token(token string, now time.Time) (Claims, error) {
 	if err = json.Unmarshal(raw, &c); err != nil {
 		return Claims{}, signatureError()
 	}
-	if !kidPattern.MatchString(c.Kid) || !bucketPattern.MatchString(c.Bucket) || strings.Contains(c.Bucket, "..") || strings.Contains(c.Bucket, ".-") || strings.Contains(c.Bucket, "-.") || SafeKey(c.Prefix) != nil || (c.Mode != "ro" && c.Mode != "rw") || c.Jti == "" || c.Iat <= 0 || c.Exp <= c.Iat || c.Exp-c.Iat > 3600 {
+	if !kidPattern.MatchString(c.Kid) || !bucketPattern.MatchString(c.Bucket) || strings.Contains(c.Bucket, "..") || strings.Contains(c.Bucket, ".-") || strings.Contains(c.Bucket, "-.") || SafeKey(c.Prefix) != nil || !strings.HasSuffix(c.Prefix, "/") || (c.Mode != "ro" && c.Mode != "rw") || c.Jti == "" || c.Iat <= 0 || c.Exp <= c.Iat || c.Exp-c.Iat > 3600 {
 		return Claims{}, signatureError()
 	}
 	if now.Unix() > c.Exp && now.Unix()-c.Exp > int64(ExpirySkew/time.Second) {

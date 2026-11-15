@@ -127,6 +127,10 @@ func (v *Verifier) Verify(r *http.Request, now time.Time) (Claims, error) {
 		}
 		secret = v.Secret(c.Kid)
 	}
+	// Header authentication must bind the exact token used to authorize scope.
+	if !master && !a.presigned && !strings.Contains(";"+a.headers+";", ";x-amz-security-token;") {
+		return empty, signatureError()
+	}
 	if a.date.After(now.Add(ExpirySkew)) || now.After(a.date.Add(a.validity).Add(ExpirySkew)) {
 		return empty, signatureError()
 	}
@@ -148,28 +152,12 @@ func (v *Verifier) Verify(r *http.Request, now time.Time) (Claims, error) {
 	if payload == "" && a.presigned {
 		payload = "UNSIGNED-PAYLOAD"
 	}
-	if payload != "UNSIGNED-PAYLOAD" {
-		body := []byte(nil)
-		if r.Body != nil {
-			body, err = io.ReadAll(r.Body)
-			closeErr := r.Body.Close()
-			r.Body = io.NopCloser(bytes.NewReader(body))
-			var tooLarge *http.MaxBytesError
-			if errors.As(err, &tooLarge) {
-				// This reports only the public body cap before checking the signature;
-				// it reveals no credential validity and is safe for unauthenticated callers.
-				return empty, &Error{http.StatusRequestEntityTooLarge, "EntityTooLarge", "The hashed request body exceeds the maximum allowed size."}
-			}
-			if err != nil || closeErr != nil {
-				return empty, signatureError()
-			}
+	declaredHash := payload != "" && payload != "UNSIGNED-PAYLOAD"
+	if payload == "" {
+		payload, err = readPayloadHash(r, payload)
+		if err != nil {
+			return empty, err
 		}
-		sum := sha256.Sum256(body)
-		actual := hex.EncodeToString(sum[:])
-		if payload != "" && !hmac.Equal([]byte(payload), []byte(actual)) {
-			return empty, signatureError()
-		}
-		payload = actual
 	}
 	clone := r.Clone(r.Context())
 	clone.Header = make(http.Header)
@@ -244,6 +232,13 @@ func (v *Verifier) Verify(r *http.Request, now time.Time) (Claims, error) {
 	if !hmac.Equal([]byte(expected), []byte(a.signature)) {
 		return empty, signatureError()
 	}
+	// A declared hash authenticates the request before we allocate for its body.
+	if declaredHash {
+		payload, err = readPayloadHash(r, payload)
+		if err != nil {
+			return empty, err
+		}
+	}
 	if master {
 		for name := range r.Header {
 			if strings.EqualFold(name, "X-Amz-Copy-Source") {
@@ -257,4 +252,31 @@ func (v *Verifier) Verify(r *http.Request, now time.Time) (Claims, error) {
 	r.Header.Set("X-Amz-Content-Sha256", payload)
 	c.Master = master
 	return c, nil
+}
+
+// readPayloadHash verifies and restores a bounded hashed body. The caller applies
+// its transport cap; an implicit hash necessarily requires a read before signing.
+func readPayloadHash(r *http.Request, payload string) (string, error) {
+	var err error
+	body := []byte(nil)
+	if r.Body != nil {
+		body, err = io.ReadAll(r.Body)
+		closeErr := r.Body.Close()
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			// The cap is public and also applies to implicit hashes, which must
+			// be read before their signature can be checked.
+			return "", &Error{http.StatusRequestEntityTooLarge, "EntityTooLarge", "The hashed request body exceeds the maximum allowed size."}
+		}
+		if err != nil || closeErr != nil {
+			return "", signatureError()
+		}
+	}
+	sum := sha256.Sum256(body)
+	actual := hex.EncodeToString(sum[:])
+	if payload != "" && !hmac.Equal([]byte(payload), []byte(actual)) {
+		return "", signatureError()
+	}
+	return actual, nil
 }
