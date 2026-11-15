@@ -283,6 +283,20 @@ def detail_map(detail: str) -> dict[str, str]:
     return found
 
 
+def written_since(row: dict, started: datetime) -> bool:
+    # GET /api/audit returns ts. Denied gateway.request rows have an empty kid.
+    raw = row.get('ts')
+    if not isinstance(raw, str):
+        return False
+    try:
+        seen = datetime.fromisoformat(raw)
+    except ValueError:
+        return False
+    if seen.tzinfo is None:
+        seen = seen.replace(tzinfo=UTC)
+    return seen >= started
+
+
 def fetch_audit(console: Console) -> tuple[int, list]:
     items: list = []
     offset = 0
@@ -302,6 +316,7 @@ def fetch_audit(console: Console) -> tuple[int, list]:
 
 def run(report: Report) -> None:
     load_env()
+    started = datetime.now(UTC)
     console_url = os.environ.get('CONSOLE_URL', 'http://localhost:8088').rstrip('/')
     s3_url = os.environ.get('S3_URL', 'http://localhost:8333').rstrip('/')
     bucket = os.environ.get('BUCKET', 'demo-images').strip() or 'demo-images'
@@ -541,8 +556,13 @@ def run(report: Report) -> None:
                         decision = parsed.get('decision', '')
                         if decision == 'allow' or decision.startswith('allow'):
                             allow += 1
-                        elif decision == 'deny' or decision.startswith('deny'):
-                            deny += 1
+                    if (
+                        action == 'gateway.request'
+                        and written_since(row, started)
+                        and parsed.get('decision') == 'deny'
+                        and parsed.get('status') == '403'
+                    ):
+                        deny += 1
             if audit_status == 200 and allow >= 1 and deny >= 1 and issued_rows >= 1:
                 break
             if time.monotonic() >= deadline:
