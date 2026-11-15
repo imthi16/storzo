@@ -96,8 +96,9 @@ func newS3Client(cfg Config) *s3.Client {
 
 // listObjectsArgs are the arguments for the list_objects tool.
 type listObjectsArgs struct {
-	Prefix  string `json:"prefix,omitempty" jsonschema:"optional key prefix, defaults to the scope prefix"`
-	MaxKeys int32  `json:"max_keys,omitempty" jsonschema:"max keys to return, 1-1000"`
+	Prefix            string `json:"prefix,omitempty" jsonschema:"optional key prefix, defaults to the scope prefix"`
+	MaxKeys           int32  `json:"max_keys,omitempty" jsonschema:"max keys to return, 1-1000"`
+	ContinuationToken string `json:"continuation_token,omitempty" jsonschema:"optional continuation token from a previous truncated list_objects result"`
 }
 
 // getObjectArgs are the arguments for the get_object tool.
@@ -135,11 +136,15 @@ func (a *app) listObjects(ctx context.Context, req *mcp.CallToolRequest, args li
 	if maxKeys < 0 || maxKeys > MaxMaxKeys {
 		return nil, nil, fmt.Errorf("max_keys out of range: want 1-%d", MaxMaxKeys)
 	}
-	out, err := a.s3.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
+	input := &s3.ListObjectsV2Input{
 		Bucket:  aws.String(a.cfg.Bucket),
 		Prefix:  aws.String(prefix),
 		MaxKeys: aws.Int32(maxKeys),
-	})
+	}
+	if args.ContinuationToken != "" {
+		input.ContinuationToken = aws.String(args.ContinuationToken)
+	}
+	out, err := a.s3.ListObjectsV2(ctx, input)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -158,12 +163,55 @@ func (a *app) listObjects(ctx context.Context, req *mcp.CallToolRequest, args li
 		}
 		fmt.Fprintf(&b, "%s (%d bytes)", key, size)
 	}
-	if b.Len() == 0 {
+	if len(out.Contents) == 0 {
 		b.WriteString("(no objects)")
+	}
+	isTruncated := false
+	if out.IsTruncated != nil {
+		isTruncated = *out.IsTruncated
+	}
+	nextToken := ""
+	if out.NextContinuationToken != nil {
+		nextToken = *out.NextContinuationToken
+	}
+	if b.Len() > 0 {
+		b.WriteString("\n")
+	}
+	fmt.Fprintf(&b, "is_truncated=%t", isTruncated)
+	if nextToken != "" {
+		fmt.Fprintf(&b, "\nnext_continuation_token=%s", nextToken)
 	}
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{&mcp.TextContent{Text: b.String()}},
 	}, nil, nil
+}
+
+// isBinaryContentType reports whether ct (params stripped) is clearly binary.
+// application/octet-stream alone is not binary: uploads without a type default to it.
+func isBinaryContentType(ct string) bool {
+	ct = strings.ToLower(strings.TrimSpace(strings.Split(ct, ";")[0]))
+	switch {
+	case strings.HasPrefix(ct, "image/"), strings.HasPrefix(ct, "audio/"), strings.HasPrefix(ct, "video/"):
+		return true
+	case ct == "application/wasm", ct == "application/zip", ct == "application/pdf":
+		return true
+	default:
+		return false
+	}
+}
+
+// hasControlBytes reports whether data contains NUL or other control bytes,
+// allowing tab, newline and carriage return.
+func hasControlBytes(data []byte) bool {
+	for _, b := range data {
+		if b == 0x7f {
+			return true
+		}
+		if b < 0x20 && b != '\t' && b != '\n' && b != '\r' {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *app) getObject(ctx context.Context, req *mcp.CallToolRequest, args getObjectArgs) (*mcp.CallToolResult, any, error) {
@@ -204,7 +252,11 @@ func (a *app) getObject(ctx context.Context, req *mcp.CallToolRequest, args getO
 	if int64(len(data)) > maxBytes {
 		return nil, nil, fmt.Errorf("too_large: %s", meta())
 	}
-	if !utf8.Valid(data) {
+	ct := ""
+	if out.ContentType != nil {
+		ct = *out.ContentType
+	}
+	if !utf8.Valid(data) || hasControlBytes(data) || isBinaryContentType(ct) {
 		return nil, nil, fmt.Errorf("too_large: binary content not inlined; %s", meta())
 	}
 	return &mcp.CallToolResult{

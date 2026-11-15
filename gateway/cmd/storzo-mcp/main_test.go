@@ -36,9 +36,19 @@ func fakeS3(t *testing.T) *httptest.Server {
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("list-type") == "2" {
 			w.Header().Set("Content-Type", "application/xml")
+			if r.URL.Query().Get("continuation-token") == "tok-2" {
+				fmt.Fprint(w, `<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">`+
+					`<Name>test-bucket</Name><Prefix>run-42/</Prefix><KeyCount>1</KeyCount>`+
+					`<MaxKeys>100</MaxKeys><IsTruncated>false</IsTruncated>`+
+					`<Contents><Key>run-42/b.txt</Key><Size>5</Size>`+
+					`<LastModified>2026-01-01T00:00:00.000Z</LastModified></Contents>`+
+					`</ListBucketResult>`)
+				return
+			}
 			fmt.Fprint(w, `<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">`+
 				`<Name>test-bucket</Name><Prefix>run-42/</Prefix><KeyCount>1</KeyCount>`+
-				`<MaxKeys>100</MaxKeys><IsTruncated>false</IsTruncated>`+
+				`<MaxKeys>100</MaxKeys><IsTruncated>true</IsTruncated>`+
+				`<NextContinuationToken>tok-2</NextContinuationToken>`+
 				`<Contents><Key>run-42/a.txt</Key><Size>5</Size>`+
 				`<LastModified>2026-01-01T00:00:00.000Z</LastModified></Contents>`+
 				`</ListBucketResult>`)
@@ -58,6 +68,25 @@ func fakeS3(t *testing.T) *httptest.Server {
 				w.Header().Set("Content-Type", "application/octet-stream")
 				w.Header().Set("Content-Length", fmt.Sprint(len(payload)))
 				w.Write(payload)
+				return
+			}
+			if strings.HasSuffix(r.URL.Path, "/file.wasm") {
+				payload := []byte{0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00}
+				w.Header().Set("Content-Type", "application/wasm")
+				w.Header().Set("Content-Length", fmt.Sprint(len(payload)))
+				w.Write(payload)
+				return
+			}
+			if strings.HasSuffix(r.URL.Path, "/nul.txt") {
+				payload := []byte("hello\x00world")
+				w.Header().Set("Content-Type", "text/plain")
+				w.Header().Set("Content-Length", fmt.Sprint(len(payload)))
+				w.Write(payload)
+				return
+			}
+			if strings.HasSuffix(r.URL.Path, "/tabs.txt") {
+				w.Header().Set("Content-Type", "text/plain")
+				fmt.Fprint(w, "a\tb\nc\r\nd")
 				return
 			}
 			w.Header().Set("Content-Type", "text/plain")
@@ -274,5 +303,93 @@ func TestInvalidModeFails(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "STORZO_MODE") {
 		t.Errorf("error should mention STORZO_MODE, got %q", err.Error())
+	}
+}
+
+// callToolText calls a tool and returns its combined text, error flag and call error text.
+// protects=test plumbing; fails_when=text extraction misses TextContent; no_claim=does not prove MCP wire framing beyond the in-memory transport.
+func callToolText(t *testing.T, ctx context.Context, session *mcp.ClientSession, name string, args map[string]any) (string, bool, string) {
+	t.Helper()
+	res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: name, Arguments: args})
+	text := ""
+	isErr := false
+	if res != nil {
+		isErr = res.IsError
+		for _, c := range res.Content {
+			if tc, ok := c.(*mcp.TextContent); ok {
+				text += tc.Text
+			}
+		}
+	}
+	errText := ""
+	if err != nil {
+		errText = err.Error()
+	}
+	return text, isErr, errText
+}
+
+func newTestSession(t *testing.T) (*mcp.ClientSession, context.CancelFunc) {
+	t.Helper()
+	fake := fakeS3(t)
+	t.Cleanup(fake.Close)
+	cfg := testConfig(fake.URL, "rw")
+	a := &app{cfg: cfg, s3: newS3Client(cfg)}
+	ctx, cancel := context.WithCancel(context.Background())
+	session := connectPair(t, ctx, buildServer(a))
+	t.Cleanup(func() { session.Close() })
+	return session, cancel
+}
+
+// TestListObjectsPagination: truncated listing surfaces token and next page is fetchable.
+// protects=pagination contract; fails_when=first page drops IsTruncated/token or token arg is ignored; no_claim=does not prove real S3 pagination.
+func TestListObjectsPagination(t *testing.T) {
+	session, cancel := newTestSession(t)
+	defer cancel()
+	ctx := context.Background()
+	text, isErr, errText := callToolText(t, ctx, session, "list_objects", map[string]any{})
+	if isErr || errText != "" {
+		t.Fatalf("first page: isErr=%v err=%q text=%q", isErr, errText, text)
+	}
+	if !strings.Contains(text, "run-42/a.txt") || !strings.Contains(text, "is_truncated=true") || !strings.Contains(text, "next_continuation_token=tok-2") {
+		t.Fatalf("first page missing key/truncation/token: %q", text)
+	}
+	text2, isErr, errText := callToolText(t, ctx, session, "list_objects", map[string]any{"continuation_token": "tok-2"})
+	if isErr || errText != "" {
+		t.Fatalf("second page: isErr=%v err=%q text=%q", isErr, errText, text2)
+	}
+	if !strings.Contains(text2, "run-42/b.txt") || !strings.Contains(text2, "is_truncated=false") {
+		t.Fatalf("second page missing key/truncation: %q", text2)
+	}
+}
+
+// TestGetObjectValidUTF8WithNULTooLarge: valid UTF-8 containing NUL is binary.
+// protects=NUL/control guard; fails_when=NUL text is inlined; no_claim=does not prove all binary formats.
+func TestGetObjectValidUTF8WithNULTooLarge(t *testing.T) {
+	session, cancel := newTestSession(t)
+	defer cancel()
+	for _, key := range []string{"run-42/nul.txt", "run-42/file.wasm"} {
+		text, isErr, errText := callToolText(t, context.Background(), session, "get_object", map[string]any{"key": key})
+		combined := text + errText
+		if !isErr && errText == "" {
+			t.Fatalf("%s: expected too_large error, got success %q", key, text)
+		}
+		if !strings.Contains(combined, "too_large") {
+			t.Fatalf("%s: expected too_large, got text=%q err=%q", key, text, errText)
+		}
+	}
+}
+
+// TestGetObjectTextStillInline: plain text and UTF-8 with tabs/newlines return inline.
+// protects=text path; fails_when=allowed whitespace is treated as binary; no_claim=does not prove large text handling.
+func TestGetObjectTextStillInline(t *testing.T) {
+	session, cancel := newTestSession(t)
+	defer cancel()
+	text, isErr, errText := callToolText(t, context.Background(), session, "get_object", map[string]any{"key": "run-42/a.txt"})
+	if isErr || errText != "" || text != "hello" {
+		t.Fatalf("plain text: isErr=%v err=%q text=%q", isErr, errText, text)
+	}
+	text, isErr, errText = callToolText(t, context.Background(), session, "get_object", map[string]any{"key": "run-42/tabs.txt"})
+	if isErr || errText != "" || !strings.Contains(text, "\t") || !strings.Contains(text, "\n") {
+		t.Fatalf("tabs/newlines text: isErr=%v err=%q text=%q", isErr, errText, text)
 	}
 }
