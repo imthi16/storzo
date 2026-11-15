@@ -276,7 +276,7 @@ func (e *Emitter) send(events []Event) {
 		return
 	}
 	err = e.post(body)
-	if err == nil || !retryable(err) {
+	if err == nil || !e.retryable(err) {
 		return
 	}
 	timer := time.NewTimer(e.backoff)
@@ -355,11 +355,13 @@ func (s statusError) Error() string {
 	return "audit endpoint status " + strconv.Itoa(int(s))
 }
 
-func retryable(err error) bool {
+func (e *Emitter) retryable(err error) bool {
 	if err == nil {
 		return false
 	}
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+	// A client timeout can wrap DeadlineExceeded while the emitter is still alive.
+	// Only cancellation of our base context means shutdown.
+	if e.base.Err() != nil {
 		return false
 	}
 	var status statusError

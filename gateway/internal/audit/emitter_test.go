@@ -442,6 +442,60 @@ func TestRetryPolicy(t *testing.T) {
 	})
 }
 
+// protects=a client timeout retries the same batch once while the emitter base context is alive;
+// fails_when=a timed-out batch is dropped, retried more than once, or changed on retry;
+// no_claim=the receiver durably stores or deduplicates the batch.
+func TestClientTimeoutRetriesBatch(t *testing.T) {
+	var hits atomic.Int32
+	var delivered recorder
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if hits.Add(1) == 1 {
+			_, _ = io.Copy(io.Discard, r.Body)
+			time.Sleep(300 * time.Millisecond)
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		delivered.save(r)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	client := testClient(srv)
+	client.Timeout = 100 * time.Millisecond
+	em := New(Config{
+		URL:           srv.URL,
+		SigningKey:    testKey,
+		BatchSize:     2,
+		FlushInterval: time.Hour,
+		RetryBackoff:  5 * time.Millisecond,
+		Client:        client,
+	})
+	want := []Event{
+		{Method: "GET", Key: "timeout-a", Status: 200, Decision: "allow"},
+		{Method: "PUT", Key: "timeout-b", Status: 201, Decision: "allow"},
+	}
+	for _, ev := range want {
+		em.Emit(ev)
+	}
+	finish(t, em)
+	if got := hits.Load(); got != 2 {
+		t.Fatalf("attempts = %d, want 2", got)
+	}
+	delivered.check(t)
+	snaps := delivered.list()
+	if len(snaps) != 1 {
+		t.Fatalf("delivered batches = %d, want 1", len(snaps))
+	}
+	got := verifySnap(t, testKey, snaps[0])
+	if len(got) != len(want) {
+		t.Fatalf("delivered events = %d, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("event %d = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
