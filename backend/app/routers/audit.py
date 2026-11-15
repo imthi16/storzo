@@ -1,4 +1,5 @@
 from datetime import UTC, datetime, timedelta
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
@@ -10,17 +11,22 @@ router = APIRouter(prefix='/api/audit', tags=['audit'])
 
 @router.get('')
 def audit_logs(limit: int = Query(50, ge=1, le=200), offset: int = Query(0, ge=0),
+               source: Literal['all', 'gateway', 'console'] = Query('all'),
+               decision: Literal['allow', 'deny'] | None = Query(None),
                _sess: dict = Depends(require_login)):
-    items, total = db.list_audit(limit, offset)
+    items, total = db.list_audit(limit, offset, source=source, decision=decision)
     return {'items': items, 'total': total, 'limit': limit, 'offset': offset}
 
 
 @router.get('/uploads-by-day')  # must stay above /{audit_id}
 def uploads_by_day(days: int = Query(14, ge=1, le=90), _sess: dict = Depends(require_login)):
-    counts = db.count_by_day('upload', days)
+    counts = db.upload_counts_by_day(days)
     today = datetime.now(UTC).date()
-    items = [{'day': str(today - timedelta(days=i)), 'count': counts.get(str(today - timedelta(days=i)), 0)}
-             for i in range(days - 1, -1, -1)]
+    items = []
+    for i in range(days - 1, -1, -1):
+        day = str(today - timedelta(days=i))
+        console, gateway = counts.get(day, (0, 0))
+        items.append({'day': day, 'count': console + gateway, 'console': console, 'gateway': gateway})
     return {'items': items}
 
 
