@@ -1,0 +1,120 @@
+/* Activity list. More specific than style.css, and loaded after it. */
+
+.activity-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 12px;
+}
+.activity-filters .filter-name {
+  font-size: 11px;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  font-family: var(--mono);
+}
+.activity-filters button {
+  border: 1px solid var(--line);
+  background: var(--rack);
+  color: var(--text-2);
+  border-radius: 3px;
+  padding: 4px 8px;
+  font-size: 12px;
+}
+.activity-filters button[aria-pressed="true"] {
+  border-color: var(--label);
+  color: var(--text);
+  background: var(--label-soft);
+}
+
+.activity-panel .activity-main {min-width: 0; flex: 1}
+.activity-panel .activity-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.activity-panel .activity-title strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.activity-panel .activity-main small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.activity-panel .activity-method,
+.activity-panel .activity-code {
+  flex: none;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-2);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 1px 5px;
+}
+.activity-panel .activity-chip {
+  flex: none;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 3px;
+  padding: 1px 6px;
+  border: 1px solid transparent;
+}
+.activity-panel .activity-chip.is-allow {
+  color: var(--ok);
+  border-color: var(--ok);
+}
+.activity-panel .activity-chip.is-deny {
+  color: var(--fail);
+  border-color: var(--fail);
+}
+
+@media (max-width: 520px) {
+  .activity-panel button.activity-row {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-areas: "icon main chevron" "when when when";
+    column-gap: 13px;
+    row-gap: 4px;
+    align-items: center;
+  }
+  .activity-panel button.activity-row > .row-icon {grid-area: icon}
+  .activity-panel button.activity-row > .activity-main {grid-area: main}
+  .activity-panel button.activity-row > svg {grid-area: chevron}
+  .activity-panel button.activity-row > .activity-when {
+    grid-area: when;
+    padding-left: 47px;
+    white-space: normal;
+  }
+}
+
+/* Desktop list is a fixed-height flex child (clientHeight 614 at 1440x900) with
+   4px padding on each end. Ten 60px rows plus that padding are 608px, so the
+   last row stays above the pager and overflow-y:auto does not scroll.
+   Mobile keeps the natural height so the stacked timestamp is not clipped. */
+@media (min-width: 821px) {
+  .panel.activity-panel button.activity-row {
+    box-sizing: border-box;
+    height: 60px;
+    padding: 8px 4px;
+  }
+  .panel.activity-panel .activity-title {
+    height: 18px;
+    line-height: 16px;
+  }
+  .panel.activity-panel .activity-main small {
+    margin-top: 2px;
+    line-height: 14px;
+  }
+  .panel.activity-panel .activity-method,
+  .panel.activity-panel .activity-code,
+  .panel.activity-panel .activity-chip {
+    line-height: 14px;
+    padding-top: 0;
+    padding-bottom: 0;
+  }
+}

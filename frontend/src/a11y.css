@@ -1,0 +1,38 @@
+/* Skip link. Hidden until keyboard focus, then drawn above the shell. */
+
+.shell > .skip-link {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+.shell > .skip-link:focus,
+.shell > .skip-link:focus-visible {
+  position: fixed;
+  top: 8px;
+  left: 8px;
+  z-index: 80;
+  width: auto;
+  height: auto;
+  margin: 0;
+  overflow: visible;
+  clip: auto;
+  padding: 8px 12px;
+  background: var(--label);
+  color: var(--label-ink);
+  border-radius: 3px;
+  font-weight: 600;
+  outline: 2px solid var(--text);
+  outline-offset: 2px;
+}
+.shell {position: relative}
+.shell > main.content:focus {outline: none}
+.shell > main.content:focus-visible {
+  outline: 2px solid var(--label);
+  outline-offset: -2px;
+}
