@@ -1,0 +1,60 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "storzo.fullname" . }}-gateway
+spec:
+  replicas: {{ .Values.gateway.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: gateway
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: gateway
+    spec:
+      automountServiceAccountToken: false
+      securityContext: {runAsNonRoot: true, runAsUser: 65532, fsGroup: 65532}
+      containers:
+        - name: gateway
+          image: {{ .Values.gateway.image | quote }}
+          imagePullPolicy: {{ .Values.gateway.imagePullPolicy }}
+          ports: [{name: s3, containerPort: 8333}]
+          env:
+            - {name: GATEWAY_LISTEN, value: {{ .Values.gateway.listen | quote }} }
+            - {name: STORAGE_ENDPOINT, value: {{ .Values.backend.s3Endpoint | quote }} }
+            - {name: AUDIT_URL, value: 'http://{{ include "storzo.fullname" . }}-backend:8000/api/internal/audit'}
+            - {name: GATEWAY_MAX_HASHED_BODY_MB, value: {{ .Values.gateway.maxHashedBodyMB | quote }} }
+            - name: STORAGE_ACCESS_KEY
+              valueFrom: {secretKeyRef: {name: {{ .Values.backend.secretName }}, key: S3_ACCESS_KEY}}
+            - name: STORAGE_SECRET_KEY
+              valueFrom: {secretKeyRef: {name: {{ .Values.backend.secretName }}, key: S3_SECRET_KEY}}
+            - name: CRED_SIGNING_KEY
+              valueFrom: {secretKeyRef: {name: {{ .Values.backend.secretName }}, key: CRED_SIGNING_KEY}}
+          readinessProbe:
+            tcpSocket: {port: s3}
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket: {port: s3}
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          resources:
+{{ toYaml .Values.resources.gateway | indent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+            seccompProfile: {type: RuntimeDefault}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "storzo.fullname" . }}-gateway
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: gateway
+  ports:
+    - {port: 8333, targetPort: s3, name: s3}

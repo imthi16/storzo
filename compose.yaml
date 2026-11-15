@@ -11,9 +11,6 @@ services:
       WEED_ADMIN_PASSWORD: ${WEED_ADMIN_PASSWORD:?Missing secret}
     volumes:
       - storage-data:/data
-    ports:
-      # Loopback only by default: S3 API is not internet-exposed.
-      - "${S3_BIND_IP:-127.0.0.1}:8333:8333"
     networks: [internal]
 
   backend:
@@ -30,7 +27,7 @@ services:
       ADMIN_USER: ${ADMIN_USER:-admin}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD}
       SESSION_SECRET: ${SESSION_SECRET}
-      CRED_SIGNING_KEY: ${CRED_SIGNING_KEY:-}
+      CRED_SIGNING_KEY: ${CRED_SIGNING_KEY:?Missing secret}
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
       MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-50}
       AUDIT_DB_PATH: /app/state/audit.db
@@ -43,6 +40,27 @@ services:
       timeout: 5s
       retries: 5
       start_period: 20s
+    networks: [internal]
+
+  gateway:
+    build: ./gateway
+    restart: unless-stopped
+    depends_on:
+      storage:
+        condition: service_started
+      backend:
+        condition: service_healthy
+    environment:
+      GATEWAY_LISTEN: ":8333"
+      STORAGE_ENDPOINT: http://storage:8333
+      STORAGE_ACCESS_KEY: ${S3_ACCESS_KEY:?Run python3 scripts/setup_env.py}
+      STORAGE_SECRET_KEY: ${S3_SECRET_KEY:?Missing secret}
+      CRED_SIGNING_KEY: ${CRED_SIGNING_KEY:?Missing secret}
+      AUDIT_URL: http://backend:8000/api/internal/audit
+      GATEWAY_MAX_HASHED_BODY_MB: "64"
+    ports:
+      # Loopback only by default: S3 API is not internet-exposed.
+      - "${S3_BIND_IP:-127.0.0.1}:8333:8333"
     networks: [internal]
 
   frontend:

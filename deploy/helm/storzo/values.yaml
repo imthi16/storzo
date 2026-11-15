@@ -16,6 +16,12 @@ frontend:
   image: storzo-frontend:0.1.0
   imagePullPolicy: IfNotPresent
   replicas: 1
+gateway:
+  image: storzo-gateway:0.1.0
+  imagePullPolicy: IfNotPresent
+  replicas: 1
+  listen: ":8333"
+  maxHashedBodyMB: "64"
 service:
   frontendPort: 80
 ingress:
@@ -30,3 +36,6 @@ resources:
   frontend:
     requests: {cpu: 25m, memory: 64Mi}
     limits: {cpu: 250m, memory: 128Mi}
+  gateway:
+    requests: {cpu: 50m, memory: 64Mi}
+    limits: {cpu: 500m, memory: 256Mi}
