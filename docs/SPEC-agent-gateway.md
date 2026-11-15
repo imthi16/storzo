@@ -1,6 +1,6 @@
 # SPEC: Agent gateway with scoped short-lived credentials and MCP (v1)
 
-Status: proposed, in review via PR. Redaction scan clean; the Codex quality-score gate was not run.
+Status: implemented (see "Implementation status" at the end). Originally proposed 2026-11-12; the sections above are the original design and are kept as written.
 Sources: `docs/R&D/HANDOFF.md`, `docs/R&D/PLAN-storage-direction.md` (both untracked in the main checkout, not on `main`).
 Verified against `origin/main` @ 5fd15b9 on 2026-11-12.
 
@@ -198,3 +198,34 @@ Resolved 2026-11-12 by taking the recommended default because the user asked me 
 3. Any change to a test, validator, CI step, timeout, tolerance, threshold, snapshot or suppression is reported on its own line with justification, before other results.
 4. A reported command names the command and its observed result; a command you did not run is not reported; stderr is never silenced in a command you cite.
 5. Your report is a claim until the parent re-executes it: say what you verified, what you reused, and what you could not check.
+
+## Implementation status
+
+Verified on Docker Compose with `scripts/gateway_e2e.py` (35 checks) unless noted.
+
+| # | Criterion | State |
+|---|-----------|-------|
+| 1 | `POST /api/credentials` 401 without login, 403 without CSRF | Verified |
+| 2 | TTL 0, negative and over 3600 give 422; default about 900 s | Verified |
+| 3 | `ro` key reads in scope, PUT is 403 | Verified |
+| 4 | 403 for another prefix, another bucket, listing without prefix, a shorter prefix (the e2e also checks a sibling prefix) | Verified |
+| 5 | `rw` PUT, 20 MB 3-part multipart with matching SHA-256, DELETE; CopyObject 501 | Verified |
+| 6 | Expired token 403 `ExpiredToken`; flipped byte rejected | Verified (the expired case needs `CRED_SIGNING_KEY` in the script's environment) |
+| 7 | `..` and `%2e%2e` give 400 and never reach SeaweedFS | 400 verified end to end; "zero upstream calls" asserted in the proxy unit tests |
+| 8 | Bucket-level calls 403 for every agent key | Verified |
+| 9 | SeaweedFS not reachable from the host except through the gateway | Verified by hand in Compose (`storage` publishes no port). Not in the script. Not true in Kubernetes without a NetworkPolicy |
+| 10 | Every issue and every request audited with kid, decision, status | Verified by a per-request ledger. Denied requests carry an empty `kid` (see below) |
+| 11 | MCP `ro` has no `put_object`/`delete_object`; the S3 op still returns 403 | `tools/list` covered by MCP unit tests; the 403 by the e2e `ro` PUT. A test running the MCP server through the real proxy handler was not written |
+| 12 | Each test states protects / fails_when / no_claim | Applied to the tests added for this work; older tests were not audited |
+| 13 | Existing backend tests, frontend build and Playwright pass unchanged | Backend and frontend lint/test/build pass in CI. The Playwright specs were not run |
+
+Where the implementation differs from the text above:
+
+- **Audit contract.** `x-storzo-signature` is HMAC-SHA256 over `<timestamp>.<body>` with `x-storzo-timestamp`, accepted within 300 s, body capped at 4 MiB, field limits enforced. `AUDIT_URL` is a required gateway setting.
+- **Denied requests have an empty `kid`**, because the identity of an unauthenticated request cannot be trusted. Criterion 10 is met for decision and status, not for kid on denials.
+- **Header allowlist.** Scoped requests forward only `x-amz-meta-*`, checksum headers and the verified payload hash; ACL/grant headers are removed for all requests, including the master key's.
+- **Credential rules added:** the prefix must end in `/`; header-signed requests must sign `x-amz-security-token`.
+- **Go version.** The Docker image builds with Go 1.26.11 because several standard-library CVEs have no fix in 1.25; `go.mod` stays at 1.25.0.
+- **Audit durability.** In-memory queue of 10,000, 4 attempts per batch, `Failed()` and `Dropped()` counters, drain on shutdown, no disk spool.
+
+Not done: revoke before expiry, rate limits, a console credentials form, `aws-chunked` support, an independent human security review, and a NetworkPolicy for Kubernetes.

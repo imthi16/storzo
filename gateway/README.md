@@ -1,7 +1,16 @@
-# Agent gateway verification core
+# Storzo gateway
 
-This module contains the verification core only. It does not run a server,
-proxy to SeaweedFS, re-sign upstream traffic, or emit audit events.
+This module is the Storzo S3 gateway for scoped agent credentials.
+
+- `cmd/storzo-gateway`: the proxy in front of SeaweedFS. It verifies a request, re-signs it with the master key and forwards it, and emits one audit event per request.
+- `internal/verify`: token, SigV4 and scope verification (details below).
+- `internal/proxy`: request rebuild and forwarding, the `x-amz-*` allowlist for scoped credentials, master pass-through.
+- `internal/audit`: batched, HMAC-signed delivery of audit events to the backend.
+- `cmd/storzo-mcp`: a stdio MCP server, a thin S3 client (scope is enforced by the gateway, not there).
+
+Required environment for the gateway: `STORAGE_ENDPOINT`, `STORAGE_ACCESS_KEY`, `STORAGE_SECRET_KEY`, `CRED_SIGNING_KEY` (32+ characters) and `AUDIT_URL`; optional `GATEWAY_LISTEN` (default `:8333`) and `GATEWAY_MAX_HASHED_BODY_MB` (default 64). It fails at startup if any required value is missing. It runs as a Compose service and a Helm Deployment; see the repository README ("Agent access").
+
+The rest of this file describes the verification library (`internal/verify`).
 
 The Python credential issuer signs the **base64url claims segment**, not the
 raw JSON bytes. Token verification follows that implementation and accepts
@@ -55,7 +64,4 @@ integrity guarantee. `STREAMING-*` payloads and `aws-chunked` content encoding
 return 501, as does CopyObject. A future server must preserve escaped paths
 and must not use a path-cleaning router before this verifier.
 
-Tests cover the scope matrix, Python-issued credentials, botocore header and
-presigned signatures for GET/list/PUT, Go SDK signer requests, tampering,
-payload hashing, expiry boundaries, and XML errors. These are verification-core
-tests; they do not exercise a live AWS CLI, SeaweedFS, proxy, MCP or audit sink.
+Tests cover the scope matrix, Python-issued credentials, botocore header and presigned signatures for GET/list/PUT, Go SDK signer requests, tampering (including MAC flips and claim rewrites under the original MAC), payload hashing, expiry boundaries and XML errors. The proxy and audit packages have their own tests against fake upstreams. The whole chain was also run against a live SeaweedFS with boto3 over plain HTTP and by `scripts/gateway_e2e.py` on Docker Compose; AWS CLI, HTTPS and load were not tested.

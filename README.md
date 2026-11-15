@@ -18,13 +18,13 @@
   <a href="#features">Features</a> ·
   <a href="#architecture">Architecture</a> ·
   <a href="#use-your-s3-sdk">S3 SDK</a> ·
-  <a href="#agent-access-in-progress">Agent access</a> ·
+  <a href="#agent-access">Agent access</a> ·
   <a href="#documentation">Documentation</a>
 </p>
 
 ---
 
-Storzo brings bucket browsing, image previews, uploads and an audit trail into one self-hosted console. Objects live in your Docker volumes or Kubernetes PersistentVolumes, and applications connect directly to SeaweedFS using S3 SDKs. No AWS or GCS account is required.
+Storzo brings bucket browsing, image previews, uploads and an audit trail into one self-hosted console. Objects live in your Docker volumes or Kubernetes PersistentVolumes, and applications connect to SeaweedFS through the Storzo S3 gateway using S3 SDKs. No AWS or GCS account is required.
 
 > **Prototype / evaluation release.** Storzo is a management console over SeaweedFS, not an independent storage engine or a production-verified MinIO replacement. Validate compatibility, security and recovery before using company data. See [project status](#project-status).
 
@@ -38,7 +38,7 @@ Storzo brings bucket browsing, image previews, uploads and an audit trail into o
 | **Storage overview** | Inspect bucket usage, file-type mix and recent objects through the console. |
 | **Admin sessions & audit** | Sign in with an HttpOnly signed cookie; management writes use CSRF protection and activity is recorded in SQLite. |
 | **S3 SDK access** | Connect applications directly to the upstream SeaweedFS S3 endpoint. |
-| **Scoped agent credentials** *(in progress)* | Issue short-lived keys limited to one bucket prefix, read-only or read-write. Issuing and verification are built; the enforcing gateway is not. See [Agent access](#agent-access-in-progress). |
+| **Scoped agent credentials** | Issue short-lived keys limited to one bucket prefix, read-only or read-write. A Go gateway in front of SeaweedFS enforces them and audits every request. See [Agent access](#agent-access). |
 | **Self-hosted deployment** | Start with Docker Compose; explore Kubernetes using the starter Helm chart. |
 
 SHA-256 metadata is recorded for console uploads. Overview scans are capped at 3,000 objects and marked partial when capped; they are not an authoritative disk or billing meter.
@@ -66,13 +66,15 @@ grep '^ADMIN_PASSWORD=' .env
 
 The `demo-images` bucket is initialized by SeaweedFS. Create additional buckets in the console. Keep `.env` private.
 
+> **Upgrading an older `.env`:** `CRED_SIGNING_KEY` (32+ characters) is now required, and `docker compose up` stops with "Missing secret" without it. `setup_env.py` never touches an existing `.env`, so add one yourself: `python3 -c "import secrets;print(secrets.token_urlsafe(48))"`.
+
 | Service | Local address |
 | --- | --- |
 | Web console & management API | `http://localhost:8088` |
-| S3 endpoint for application SDKs | `http://localhost:8333` |
+| S3 endpoint for application SDKs (the Storzo gateway) | `http://localhost:8333` |
 | Liveness / readiness | `/api/health/live` / `/api/health/ready` on the console address |
 
-Both published ports bind to loopback by default. Image selection follows `SEAWEEDFS_TAG` in `.env`; review it and pin an immutable image digest for production deployments.
+Both published ports bind to loopback by default. SeaweedFS itself publishes no host port; port 8333 is the gateway. Image selection follows `SEAWEEDFS_TAG` in `.env`; review it and pin an immutable image digest for production deployments.
 
 <details>
 <summary><strong>Check health or troubleshoot startup</strong></summary>
@@ -94,19 +96,23 @@ The backend waits for storage connectivity; initial image builds and startup may
 ```mermaid
 flowchart LR
     Console["Browser console · React"] --> API["Management API · FastAPI"]
-    API --> S3["SeaweedFS · S3 gateway"]
+    API --> S3["SeaweedFS · S3 (internal network only)"]
     API --> Audit[("SQLite audit trail")]
-    App["Your application · S3 SDK"] --> S3
+    App["Your application · S3 SDK"] --> GW["Storzo gateway · Go"]
+    Agent["AI agent · scoped credential"] --> GW
+    GW --> S3
+    GW -. "audit events (HMAC)" .-> API
     S3 --> Data[("Object data · Docker volume / PVC")]
 ```
 
-**Storzo manages the console experience. SeaweedFS stores the objects.** The FastAPI API handles console sessions, management operations, thumbnails and audit records. Application SDK traffic goes directly to SeaweedFS.
+**Storzo manages the console experience. SeaweedFS stores the objects.** The FastAPI API handles console sessions, management operations, thumbnails and audit records. Application and agent SDK traffic goes through the Storzo gateway, which verifies the credential, forwards to SeaweedFS and records every request in the audit trail.
 
 | Layer | Technology |
 | --- | --- |
 | Console | React 19, TypeScript, Vite |
 | Management API | FastAPI, Python, SQLite |
-| Object storage | SeaweedFS S3 gateway |
+| S3 gateway | Go (`gateway/`): SigV4 and scoped-credential verification, proxy, audit emitter, MCP server |
+| Object storage | SeaweedFS S3 |
 | Deployment | Docker Compose, starter Helm chart |
 
 Read the [architecture guide](docs/ARCHITECTURE.md) for data flow and trust boundaries.
@@ -141,30 +147,43 @@ s3.upload_file("example.png", "demo-images", "photos/example.png")
 print(s3.list_objects_v2(Bucket="demo-images"))
 ```
 
-Within the Compose network, use `http://storage:8333`. Presigned browser links must use an endpoint reachable by the browser, configured through `S3_PUBLIC_ENDPOINT`. Validate the S3 operations your application needs against SeaweedFS before migrating.
+Within the Compose network, use `http://gateway:8333` (SeaweedFS itself is not reachable from the host). Presigned browser links must use an endpoint reachable by the browser, configured through `S3_PUBLIC_ENDPOINT`. Validate the S3 operations your application needs against SeaweedFS before migrating.
 
-## Agent access (in progress)
+## Agent access
 
-The goal: hand an AI agent a credential that can reach **one bucket prefix**, read-only or read-write, and stops working on its own (15 minutes by default, 1 hour at most), while your master S3 key stays private. The full design is in the [agent gateway spec](docs/SPEC-agent-gateway.md).
+Give an AI agent a credential that reaches **one bucket prefix**, read-only or read-write, and stops working on its own (15 minutes by default, 1 hour at most), while your master S3 key stays private. Design and acceptance criteria: [agent gateway spec](docs/SPEC-agent-gateway.md).
 
-| Piece | State |
+How it works: the console API issues a signed token and a secret derived from it. The agent talks S3 to the gateway on `:8333`. The gateway checks the token, the AWS SigV4 signature and the scope, then forwards the request to SeaweedFS signed with the master key, and sends an audit event for every request (allowed or denied) to the backend. SeaweedFS is not published on the host.
+
+| Piece | Where |
 | --- | --- |
-| `POST /api/credentials` issues an access key, secret and session token | Built. Needs a console login and CSRF token; the prefix must end in `/`. |
-| Credential verification (token, SigV4 signature, scope rules) in [`gateway/internal/verify`](gateway/README.md) | Built as a Go library with tests. Not a running server. |
-| `storzo-mcp`, a stdio [MCP](https://modelcontextprotocol.io) server with `list_objects` and `get_object`, plus `put_object` and `delete_object` for `rw` credentials | Built. Tested against a fake S3 only. |
-| `POST /api/internal/audit` ingests gateway audit events (HMAC-signed, blocked at the nginx edge) | Built. |
-| Gateway proxy in front of SeaweedFS, SeaweedFS made internal-only, audit emission | **Not built.** |
+| `POST /api/credentials` issues an access key, secret and session token | Backend. Needs a console login and CSRF token; the prefix must end in `/`. |
+| Gateway: verification, scope rules and proxy | [`gateway/`](gateway/README.md), Compose service `gateway`, Helm `gateway.yaml` |
+| Audit: `gateway.request` rows in the Activity trail | Gateway emitter to `POST /api/internal/audit` (HMAC-signed, blocked at nginx) |
+| `storzo-mcp`, a stdio [MCP](https://modelcontextprotocol.io) server | `gateway/cmd/storzo-mcp`: `list_objects`, `get_object`, plus `put_object` and `delete_object` for `rw` |
 
-> **Scoped credentials are not a security boundary yet.** No running component accepts or enforces them, and `:8333` still takes the master key. Do not treat an issued credential as protection until the gateway proxy ships.
+Scope rules: `ro` may `GET`, `HEAD` and list inside the prefix; `rw` may also `PUT`, multipart upload and `DELETE` there. Everything else is 403 (another prefix or bucket, listing without a prefix, bucket-level calls such as CreateBucket). `..` keys are 400. CopyObject and `aws-chunked` streaming uploads are 501. For scoped credentials the gateway forwards only `x-amz-meta-*` and checksum headers; ACL, object-lock, encryption and storage-class headers are dropped.
 
 Issue a credential (signed in, with the CSRF token from your session):
 
 ```http
 POST /api/credentials
-{"bucket": "agent-data", "prefix": "run-42/", "mode": "ro", "ttl_seconds": 900}
+{"bucket": "demo-images", "prefix": "run-42/", "mode": "ro", "ttl_seconds": 900}
 ```
 
-The response carries `access_key_id`, `secret_access_key`, `session_token`, `expires_at` and `endpoint`. The endpoint needs `CRED_SIGNING_KEY` (32+ characters). `scripts/setup_env.py` generates one for a new `.env`; an older `.env` needs it added by hand, or the endpoint answers 503.
+The response carries `access_key_id`, `secret_access_key`, `session_token`, `expires_at` and `endpoint`. Use them with any S3 SDK (path-style, SigV4, with the session token) against the gateway address:
+
+```python
+import boto3
+from botocore.config import Config
+
+s3 = boto3.client("s3", endpoint_url="http://localhost:8333", region_name="us-east-1",
+                  aws_access_key_id=cred["access_key_id"], aws_secret_access_key=cred["secret_access_key"],
+                  aws_session_token=cred["session_token"],
+                  config=Config(signature_version="s3v4", s3={"addressing_style": "path"}))
+s3.get_object(Bucket="demo-images", Key="run-42/a.txt")   # 200
+s3.get_object(Bucket="demo-images", Key="run-43/a.txt")   # 403 AccessDenied
+```
 
 To try the MCP server, build it with Go 1.25+ and pass the issued values as environment variables:
 
@@ -173,6 +192,16 @@ cd gateway && go build -o storzo-mcp ./cmd/storzo-mcp
 # Required: STORZO_ENDPOINT, STORZO_ACCESS_KEY_ID, STORZO_SECRET_ACCESS_KEY,
 #           STORZO_SESSION_TOKEN, STORZO_BUCKET, STORZO_PREFIX, STORZO_MODE (ro or rw)
 ```
+
+**Existing applications keep working.** The master key still works through the gateway without scope checks. One difference: ACL and grant headers (`x-amz-acl`, `x-amz-grant-*`) are removed from every request, including the master key's.
+
+Limits to know before relying on it:
+
+- No revoke before expiry. The kill switch is rotating `CRED_SIGNING_KEY` and restarting the backend and gateway.
+- Tested with boto3 over plain HTTP. SDK uploads that use `aws-chunked` streaming get 501 (which SDK defaults do this was not tested). AWS CLI, HTTPS and load were not tested.
+- Audit is best effort: a queue of 10,000 events, 4 attempts per batch, no disk spool. Denied requests are logged with an empty `kid`.
+- The audit endpoint accepts a replay inside its 5-minute window.
+- Reviewed by automated tests, mutation checks and cross-review by other AI agents (10 findings fixed; one Kubernetes concern is still open). There has been no human or third-party security review.
 
 ## Development & verification
 
@@ -192,7 +221,7 @@ npm install
 npm run build
 ```
 
-Test the gateway Go module (verification library and MCP server):
+Test the gateway Go module (verification, proxy, audit emitter and MCP server):
 
 ```bash
 cd gateway
@@ -207,9 +236,11 @@ python3 scripts/smoke_test.py
 bash scripts/verify_restart.sh
 ```
 
+Against a running stack, `python3 scripts/gateway_e2e.py` checks the agent-gateway acceptance criteria (credential API, scope rules, multipart, audit coverage of every request); it needs `ADMIN_PASSWORD` and the master S3 keys, and `CRED_SIGNING_KEY` for the expired-token case.
+
 For the combined Docker build, S3 smoke and restart/checksum workflow, use `bash scripts/demo_verify.sh`. These integration checks create test data and restart services; use a demo environment.
 
-CI runs `ruff`, `mypy` and `pytest` (85% coverage floor) with `pip-audit` for the backend; lint, tests, build and `npm audit` for the frontend; an image build with a Trivy scan; Helm lint; and Compose validation. CI runs gofmt, vet and race tests for the gateway. Historical results and remaining acceptance gates are recorded in [build verification](docs/BUILD_VERIFICATION.md); they are not evidence of production readiness.
+CI runs `ruff`, `mypy` and `pytest` (85% coverage floor) with `pip-audit` for the backend; lint, tests, build and `npm audit` for the frontend; an image build of backend, frontend and gateway with a Trivy scan; Helm lint; Compose validation; and gofmt, `go vet` and race tests for the gateway. Historical results and remaining acceptance gates are recorded in [build verification](docs/BUILD_VERIFICATION.md); they are not evidence of production readiness.
 
 ## Project status
 
@@ -222,7 +253,7 @@ Storzo is an **MVP for isolated evaluation**, including a possible MinIO migrati
 | Compatibility | S3 behavior is supplied by SeaweedFS; MinIO feature parity is not established. |
 | Security | TLS ingress, rate limiting, external secret management and security review remain production requirements. |
 | Recovery | A same-host cold backup/restore drill script exists; off-host recovery and RPO/RTO targets remain unproven. |
-| Agent access | Credential issuing, the verification library and the MCP server are merged. The gateway that enforces them is not built, and none of it has run against a live SeaweedFS. |
+| Agent access | Scoped credentials, the gateway and its audit trail are in place and tested end to end on Docker Compose. Not covered: Kubernetes in a real cluster, HTTPS, AWS CLI, load, or a human security review. |
 
 Versioned-bucket deletes can create delete markers instead of reclaiming storage immediately. Self-hosting also carries server, disk, backup, network and maintenance costs.
 
