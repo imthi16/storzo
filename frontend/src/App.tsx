@@ -1,7 +1,7 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Activity, ArrowDown, ArrowDownToLine, ArrowUp, ChevronRight, Copy, Database, LayoutDashboard, LogOut, Menu, RefreshCw, Settings, X } from 'lucide-react';
 import type { Session, Bucket, Obj, Listing, Stats, SortKey, Preview, Audit, Page, ActivityPage, UploadItem, DialogState } from './types';
-import { plural, enc, bytes, isImage, shortName, folderOf, when, bucketNameError, activityFilterQuery, activityFiltersFromHash, auditListQuery, type AuditDecision, type AuditSource } from './lib/format';
+import { plural, enc, bytes, isImage, shortName, folderOf, when, bucketNameError, activityFilterQuery, activityFiltersFromHash, auditListQuery, skipToMainContent, type AuditDecision, type AuditSource } from './lib/format';
 import { pageFromHash, hashFor } from './lib/routes';
 import { ApiError, call } from './api/client';
 import { postUpload } from './api/upload';
@@ -350,7 +350,7 @@ export function App() {
   if (!session) return <LoginPage login={login} username={username} setUsername={setUsername} password={password} setPassword={setPassword} loginBusy={loginBusy} notice={notice}/>;
 
   return <div className="shell">
-    <a className="skip-link" href="#main-content">Skip to content</a>
+    <a className="skip-link" href="#main-content" onClick={skipToMainContent}>Skip to content</a>
     <aside className={`sidebar ${menuOpen?'expanded':''}`}>
       <div className="brand"><div className="brand-icon"><Database size={22}/></div><div><strong>Storzo</strong><small>STORAGE CONSOLE</small></div></div>
       

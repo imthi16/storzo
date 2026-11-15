@@ -42,12 +42,29 @@ export const parseGatewayDetail = (detail: string | null | undefined): GatewayDe
   }
 };
 
+const gatewayVerb = (method: string) => {
+  if (method === 'GET' || method === 'HEAD') return 'S3 read';
+  if (method === 'PUT' || method === 'POST') return 'S3 write';
+  if (method === 'DELETE') return 'S3 delete';
+  return 'S3 request';
+};
+
 export const activityTitle = (action: string, detail: string | null) => {
   if (action === 'gateway.request') {
     const parsed = parseGatewayDetail(detail);
-    if (parsed) return `S3 ${parsed.method}`;
+    if (parsed) return gatewayVerb(parsed.method);
   }
   return action.replaceAll('_', ' ');
+};
+
+// The skip link stays an anchor for no-JS, but its href must not become location.hash:
+// pageFromHash maps #main-content to the dashboard. Focus main instead.
+export const skipToMainContent = (event: {preventDefault: () => void}, doc: Pick<Document, 'getElementById'> = document) => {
+  event.preventDefault();
+  const main = doc.getElementById('main-content');
+  if (!main) return;
+  main.focus();
+  main.scrollIntoView({block: 'start'});
 };
 
 export const auditListQuery = (opts: {limit: number; offset: number; source: AuditSource; decision: AuditDecision}) => {

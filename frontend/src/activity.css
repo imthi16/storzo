@@ -91,3 +91,30 @@
     white-space: normal;
   }
 }
+
+/* Desktop list is a fixed-height flex child (clientHeight 614 at 1440x900) with
+   4px padding on each end. Ten 60px rows plus that padding are 608px, so the
+   last row stays above the pager and overflow-y:auto does not scroll.
+   Mobile keeps the natural height so the stacked timestamp is not clipped. */
+@media (min-width: 821px) {
+  .panel.activity-panel button.activity-row {
+    box-sizing: border-box;
+    height: 60px;
+    padding: 8px 4px;
+  }
+  .panel.activity-panel .activity-title {
+    height: 18px;
+    line-height: 16px;
+  }
+  .panel.activity-panel .activity-main small {
+    margin-top: 2px;
+    line-height: 14px;
+  }
+  .panel.activity-panel .activity-method,
+  .panel.activity-panel .activity-code,
+  .panel.activity-panel .activity-chip {
+    line-height: 14px;
+    padding-top: 0;
+    padding-bottom: 0;
+  }
+}

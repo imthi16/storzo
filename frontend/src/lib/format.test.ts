@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { activityFilterQuery, activityFiltersFromHash, auditListQuery, bucketNameError, bytes, folderOf, isImage, parseGatewayDetail, plural, shortName, when } from './format';
+import { activityFilterQuery, activityFiltersFromHash, activityTitle, auditListQuery, bucketNameError, bytes, folderOf, isImage, parseGatewayDetail, plural, shortName, skipToMainContent, when } from './format';
 import { pageFromHash } from './routes';
 
 afterEach(() => vi.unstubAllGlobals());
@@ -64,6 +64,48 @@ describe('parseGatewayDetail', () => {
     expect(parseGatewayDetail('method=GET bytes=no kid= decision=deny status=403')).toBeNull();
     expect(parseGatewayDetail('method=GET bytes=1 kid=x decision=maybe status=200')).toBeNull();
     expect(() => parseGatewayDetail('= = =')).not.toThrow();
+  });
+});
+
+describe('activityTitle', () => {
+  const detail = (method: string) => `method=${method} bytes=1 kid=k decision=allow status=200`;
+  it('names a gateway call without repeating the method chip', () => {
+    expect(activityTitle('gateway.request', detail('GET'))).toBe('S3 read');
+    expect(activityTitle('gateway.request', detail('head'))).toBe('S3 read');
+    expect(activityTitle('gateway.request', detail('PUT'))).toBe('S3 write');
+    expect(activityTitle('gateway.request', detail('POST'))).toBe('S3 write');
+    expect(activityTitle('gateway.request', detail('DELETE'))).toBe('S3 delete');
+    expect(activityTitle('gateway.request', detail('COPY'))).toBe('S3 request');
+  });
+  it('keeps the spaced action when the detail is not a gateway row', () => {
+    expect(activityTitle('create_bucket', null)).toBe('create bucket');
+    expect(activityTitle('gateway.request', 'not a detail')).toBe('gateway.request');
+  });
+});
+
+describe('skipToMainContent', () => {
+  it('focuses main and does not write location.hash', () => {
+    const hash = {value: '#/activity'};
+    const locationLike = {};
+    Object.defineProperty(locationLike, 'hash', {get: () => hash.value, set: (v: string) => { hash.value = v; }});
+    const main = {focus: vi.fn(), scrollIntoView: vi.fn()};
+    const event = {preventDefault: vi.fn()};
+    skipToMainContent(event, {getElementById: (id) => id === 'main-content' ? main as unknown as HTMLElement : null});
+    expect(event.preventDefault).toHaveBeenCalledOnce();
+    expect(main.focus).toHaveBeenCalledOnce();
+    expect(main.scrollIntoView).toHaveBeenCalledWith({block: 'start'});
+    expect(hash.value).toBe('#/activity');
+  });
+  it('still cancels navigation when main is missing', () => {
+    const event = {preventDefault: vi.fn()};
+    expect(() => skipToMainContent(event, {getElementById: () => null})).not.toThrow();
+    expect(event.preventDefault).toHaveBeenCalledOnce();
+  });
+  it('shows why the href must be cancelled: #main-content is not the activity route', () => {
+    vi.stubGlobal('location', {hash: '#main-content'});
+    expect(pageFromHash()).toEqual({page: 'dashboard', id: null});
+    vi.stubGlobal('location', {hash: '#/activity'});
+    expect(pageFromHash()).toEqual({page: 'activity', id: null});
   });
 });
 
