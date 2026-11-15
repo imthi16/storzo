@@ -4,8 +4,8 @@
 
 <p align="center">
   <a href="https://github.com/imthi16/storzo/actions/workflows/ci.yml"><img src="https://github.com/imthi16/storzo/actions/workflows/ci.yml/badge.svg" alt="Storzo CI" /></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-e8c547?labelColor=171f27" alt="License: MIT" /></a>
-  <a href="#project-status"><img src="https://img.shields.io/badge/status-prototype-e8c547?labelColor=171f27" alt="Status: prototype" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-3ddc84?labelColor=0d1512" alt="License: MIT" /></a>
+  <a href="#project-status"><img src="https://img.shields.io/badge/status-prototype-3ddc84?labelColor=0d1512" alt="Status: prototype" /></a>
 </p>
 
 <p align="center">
@@ -299,6 +299,7 @@ Open `http://localhost:8088`. Production deployment needs TLS ingress, external 
 | [Deployment configuration](deploy/) | Starter Helm chart and SeaweedFS demo values |
 | [Migration](docs/MIGRATION.md) | Staged MinIO evaluation and cutover requirements |
 | [Security checklist](docs/SECURITY_CHECKLIST.md) | Requirements before production exposure |
+| [Design system](DESIGN.md) | Colors, type, components and rules of the console UI (what the CSS actually ships) |
 | [Build verification](docs/BUILD_VERIFICATION.md) | Recorded checks and outstanding validation |
 | [Release status](docs/RELEASE_STATUS.md) | Dated MVP release notes and demo checklist |
 
