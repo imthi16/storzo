@@ -112,7 +112,7 @@ describe('gatewayKidDisplay', () => {
   it('uses a neutral label when the gateway stored no credential id', () => {
     expect(gatewayKidDisplay('')).toEqual({
       value: 'not recorded',
-      note: 'The gateway records a credential id only for allowed requests.',
+      note: 'No credential id was stored: authentication failed, or the event was recorded before the gateway kept the id of authenticated denials.',
     });
   });
   it('shows a stored id without the empty note', () => {
