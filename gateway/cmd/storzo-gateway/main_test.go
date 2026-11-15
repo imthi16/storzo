@@ -10,6 +10,7 @@ import (
 // fails_when=run starts a listener or fails to name STORAGE_SECRET_KEY;
 // no_claim=live deployment, signal delivery or SeaweedFS connectivity.
 func TestStartupMissingEnv(t *testing.T) {
+	t.Setenv("AUDIT_URL", "http://backend:8000/api/internal/audit")
 	t.Setenv("STORAGE_ENDPOINT", "http://storage:8333")
 	t.Setenv("STORAGE_ACCESS_KEY", "public-test-master")
 	t.Setenv("STORAGE_SECRET_KEY", "")

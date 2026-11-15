@@ -12,40 +12,42 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/aws/signer/v4"
+	"github.com/imthi16/storzo/gateway/internal/audit"
 	"github.com/imthi16/storzo/gateway/internal/verify"
 )
 
-type Event struct {
-	Kid, Method, Bucket, Key string
-	Status                   int
-	Bytes                    int64
-	Decision                 string
-}
+// Event is the shared audit ingest event.
+type Event = audit.Event
 type Auditor interface{ Emit(Event) }
 type noop struct{}
 
 func (noop) Emit(Event) {}
 
 type Config struct {
-	Listen, StorageEndpoint, StorageAccessKey, StorageSecretKey, CredSigningKey string
-	MaxHashedBodyBytes                                                          int64
+	Listen, StorageEndpoint, StorageAccessKey, StorageSecretKey, CredSigningKey, AuditURL string
+	MaxHashedBodyBytes                                                                    int64
 }
 
 // ConfigFromEnv validates configuration without including secret values in errors.
 func ConfigFromEnv() (Config, error) {
-	c := Config{Listen: os.Getenv("GATEWAY_LISTEN"), StorageEndpoint: os.Getenv("STORAGE_ENDPOINT"), StorageAccessKey: os.Getenv("STORAGE_ACCESS_KEY"), StorageSecretKey: os.Getenv("STORAGE_SECRET_KEY"), CredSigningKey: os.Getenv("CRED_SIGNING_KEY")}
+	c := Config{AuditURL: os.Getenv("AUDIT_URL"), Listen: os.Getenv("GATEWAY_LISTEN"), StorageEndpoint: os.Getenv("STORAGE_ENDPOINT"), StorageAccessKey: os.Getenv("STORAGE_ACCESS_KEY"), StorageSecretKey: os.Getenv("STORAGE_SECRET_KEY"), CredSigningKey: os.Getenv("CRED_SIGNING_KEY")}
 	var missing []string
-	for _, item := range []struct{ name, value string }{{"STORAGE_ENDPOINT", c.StorageEndpoint}, {"STORAGE_ACCESS_KEY", c.StorageAccessKey}, {"STORAGE_SECRET_KEY", c.StorageSecretKey}, {"CRED_SIGNING_KEY", c.CredSigningKey}} {
+	for _, item := range []struct{ name, value string }{{"STORAGE_ENDPOINT", c.StorageEndpoint}, {"STORAGE_ACCESS_KEY", c.StorageAccessKey}, {"STORAGE_SECRET_KEY", c.StorageSecretKey}, {"CRED_SIGNING_KEY", c.CredSigningKey}, {"AUDIT_URL", c.AuditURL}} {
 		if item.value == "" {
 			missing = append(missing, item.name)
 		}
 	}
 	if len(missing) > 0 {
 		return c, fmt.Errorf("missing environment variables: %s", strings.Join(missing, ", "))
+	}
+	u, err := url.Parse(c.AuditURL)
+	if err != nil || u == nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.Fragment != "" {
+		return c, errors.New("invalid AUDIT_URL: expected an HTTP URL")
 	}
 	if c.Listen == "" {
 		c.Listen = ":8333"
@@ -117,6 +119,14 @@ func New(c Config, auditor Auditor) (*Handler, error) {
 			p.Out.Header.Del("X-Amz-Security-Token")
 			p.Out.Header.Del("X-Amz-Date")
 			p.Out.Header.Del("X-Amz-Content-Sha256")
+			// Verify the client's signature first, then remove controls that would
+			// otherwise exercise master-key ACL privileges upstream.
+			for name := range p.Out.Header {
+				lower := strings.ToLower(name)
+				if lower == "x-amz-acl" || strings.HasPrefix(lower, "x-amz-grant-") || lower == "x-amz-tagging-directive" {
+					delete(p.Out.Header, name)
+				}
+			}
 			// Preserve the exact bytes/order/escaping of non-auth query components.
 			var parts []string
 			for _, part := range strings.Split(p.In.URL.RawQuery, "&") {
@@ -157,6 +167,11 @@ func (s signingTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	rw := &responseWriter{ResponseWriter: w}
+	var requestBytes atomic.Int64
+	if r.Body != nil {
+		// Count the original input, not the verifier's in-memory replay.
+		r.Body = &countingBody{ReadCloser: r.Body, bytes: &requestBytes}
+	}
 	bucket, key, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, "/"), "/")
 	auth := r.Header.Get("Authorization")
 	_, auth, _ = strings.Cut(auth, "Credential=")
@@ -166,7 +181,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	event := Event{Kid: kid, Method: r.Method, Bucket: bucket, Key: key, Decision: "deny"}
 	defer func() {
-		event.Status, event.Bytes = rw.status, rw.bytes
+		event.Status, event.Bytes = rw.status, requestBytes.Load()+rw.bytes
 		if event.Status == 0 {
 			event.Status = 200
 		}
@@ -192,6 +207,17 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	event.Kid, event.Decision = claims.Kid, "allow"
 	h.upstream.ServeHTTP(rw, r)
+}
+
+type countingBody struct {
+	io.ReadCloser
+	bytes *atomic.Int64
+}
+
+func (b *countingBody) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	b.bytes.Add(int64(n))
+	return n, err
 }
 
 type responseWriter struct {
