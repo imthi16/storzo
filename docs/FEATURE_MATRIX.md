@@ -35,7 +35,7 @@ Status meanings: **Implemented** = source code exists, subject to end-to-end val
 | Ops | Helm chart and SeaweedFS chart values | Implemented as config | Unvalidated live deployment; adjust cluster needs |
 | Ops | Secrets generator | Implemented | Random generated secret; local .env only |
 | Ops | Backend unit tests | Implemented and passed | Fake-S3 suite; CI also runs ruff, mypy and an 85% coverage floor |
-| Ops | Gateway Go tests | Implemented, local only | `cd gateway && go vet ./... && go test ./...`. No Go job in CI yet |
+| Ops | Gateway Go tests | Implemented | CI runs gofmt, vet and race tests for the gateway |
 | Ops | Real S3 integrity smoke script | Implemented as script | Run only against live stack |
 | Ops | Verified restart persistence | Manual validation required | Do not mark complete based on PVC configuration alone |
 | Ops | TLS / enterprise auth / MFA | Planned | Must be implemented before internet exposure |

@@ -79,3 +79,16 @@ jobs:
           python-version: '3.12'
       - run: python scripts/setup_env.py
       - run: docker compose config --quiet
+
+  gateway:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: gateway/go.mod
+          cache: true
+          cache-dependency-path: gateway/go.sum
+      - run: cd gateway && test -z "$(gofmt -l .)"
+      - run: cd gateway && go vet ./...
+      - run: cd gateway && go test -race -count=1 ./...

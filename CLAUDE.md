@@ -34,7 +34,7 @@ bash scripts/k8s_demo_install.sh    # Kubernetes demo (needs BACKEND_IMAGE / FRO
 ```
 
 ```bash
-# Gateway (Go module: verification library + storzo-mcp). No Go job in CI yet, so run it locally.
+# Gateway (Go module: verification library + storzo-mcp). CI runs gofmt, vet and race tests for the gateway.
 cd gateway && gofmt -l . && go vet ./... && go test -count=1 ./...
 # Regenerate cross-language test vectors from the real Python issuer and botocore signer:
 cd backend && python3 tests/gateway_vectors.py
