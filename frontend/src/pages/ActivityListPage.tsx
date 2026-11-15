@@ -1,6 +1,6 @@
 import { Activity, ChevronRight, RefreshCw } from 'lucide-react';
 import type { ActivityPage } from '../types';
-import { activityTitle, parseGatewayDetail, when, type AuditDecision, type AuditSource } from '../lib/format';
+import { activityRowLabel, activityTitle, parseGatewayDetail, when, type AuditDecision, type AuditSource } from '../lib/format';
 import { Pager } from '../components/Pager';
 
 type Props = {
@@ -44,7 +44,7 @@ export function ActivityListPage({activity, pageSize, changePageSize, setActivit
           const title = activityTitle(e.action, e.detail);
           const gw = e.action === 'gateway.request' ? parseGatewayDetail(e.detail) : null;
           const where = `${e.bucket || 'console'}${e.object_key ? ` / ${e.object_key}` : ''}`;
-          return <button className="activity-row" key={e.id} onClick={() => openActivity(e.id)} aria-label={`Open event ${e.id}: ${title}`}>
+          return <button className="activity-row" key={e.id} onClick={() => openActivity(e.id)} aria-label={activityRowLabel(e)}>
             <div className="row-icon"><Activity size={18}/></div>
             <div className="activity-main">
               <div className="activity-title">

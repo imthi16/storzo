@@ -57,6 +57,21 @@ export const activityTitle = (action: string, detail: string | null) => {
   return action.replaceAll('_', ' ');
 };
 
+export const activityRowLabel = (event: {id: number; action: string; detail: string | null; bucket: string | null; object_key: string | null}) => {
+  const title = activityTitle(event.action, event.detail);
+  const gw = event.action === 'gateway.request' ? parseGatewayDetail(event.detail) : null;
+  if (!gw) return `Open event ${event.id}: ${title}`;
+  const where = event.object_key ? `${event.bucket || 'console'}/${event.object_key}` : (event.bucket || 'console');
+  const decision = gw.decision === 'allow' ? 'allowed' : 'denied';
+  return `Open event ${event.id}: ${title}, ${gw.method}, ${decision}, status ${gw.status}, ${where}`;
+};
+
+// An empty kid means the gateway did not store one. Allowed requests store it;
+// a signed request denied by scope does not. Say neither cause.
+export const GATEWAY_KID_NOTE = 'The gateway records a credential id only for allowed requests.';
+export const gatewayKidDisplay = (kid: string): {value: string; note: string | null} =>
+  kid ? {value: kid, note: null} : {value: 'not recorded', note: GATEWAY_KID_NOTE};
+
 // The skip link stays an anchor for no-JS, but its href must not become location.hash:
 // pageFromHash maps #main-content to the dashboard. Focus main instead.
 export const skipToMainContent = (event: {preventDefault: () => void}, doc: Pick<Document, 'getElementById'> = document) => {

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { activityFilterQuery, activityFiltersFromHash, activityTitle, auditListQuery, bucketNameError, bytes, folderOf, isImage, parseGatewayDetail, plural, shortName, skipToMainContent, when } from './format';
+import { activityFilterQuery, activityFiltersFromHash, activityRowLabel, activityTitle, auditListQuery, bucketNameError, bytes, folderOf, gatewayKidDisplay, isImage, parseGatewayDetail, plural, shortName, skipToMainContent, when } from './format';
 import { pageFromHash } from './routes';
 
 afterEach(() => vi.unstubAllGlobals());
@@ -80,6 +80,43 @@ describe('activityTitle', () => {
   it('keeps the spaced action when the detail is not a gateway row', () => {
     expect(activityTitle('create_bucket', null)).toBe('create bucket');
     expect(activityTitle('gateway.request', 'not a detail')).toBe('gateway.request');
+  });
+});
+
+describe('activityRowLabel', () => {
+  it('includes method, decision, status and location for an allow', () => {
+    expect(activityRowLabel({
+      id: 42, action: 'gateway.request', bucket: 'agent-scratch', object_key: 'run-42/a.txt',
+      detail: 'method=GET bytes=1 kid=k decision=allow status=200',
+    })).toBe('Open event 42: S3 read, GET, allowed, status 200, agent-scratch/run-42/a.txt');
+  });
+  it('spells a deny as denied', () => {
+    expect(activityRowLabel({
+      id: 7, action: 'gateway.request', bucket: 'agent-scratch', object_key: 'x',
+      detail: 'method=PUT bytes=0 kid= decision=deny status=403',
+    })).toBe('Open event 7: S3 write, PUT, denied, status 403, agent-scratch/x');
+  });
+  it('keeps the old label when gateway detail does not parse', () => {
+    expect(activityRowLabel({
+      id: 3, action: 'gateway.request', bucket: 'agent-scratch', object_key: 'x', detail: 'not a detail',
+    })).toBe('Open event 3: gateway.request');
+  });
+  it('keeps the old label for a console row', () => {
+    expect(activityRowLabel({
+      id: 4, action: 'create_bucket', bucket: null, object_key: null, detail: 'name=demo',
+    })).toBe('Open event 4: create bucket');
+  });
+});
+
+describe('gatewayKidDisplay', () => {
+  it('uses a neutral label when the gateway stored no credential id', () => {
+    expect(gatewayKidDisplay('')).toEqual({
+      value: 'not recorded',
+      note: 'The gateway records a credential id only for allowed requests.',
+    });
+  });
+  it('shows a stored id without the empty note', () => {
+    expect(gatewayKidDisplay('STZAAAAAAAAAAAAAAAA')).toEqual({value: 'STZAAAAAAAAAAAAAAAA', note: null});
   });
 });
 
