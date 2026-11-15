@@ -48,7 +48,7 @@ def test_default_ttl_is_15_minutes(client):
 
 @pytest.mark.parametrize('over,code', [
     ({'bucket': 'BAD_Bucket'}, 400), ({'prefix': '../x/'}, 400), ({'prefix': ''}, 400),
-    ({'prefix': '/abs/'}, 400), ({'bucket': 'no-such-bucket'}, 404), ({'mode': 'admin'}, 422)])
+    ({'prefix': '/abs/'}, 400), ({'prefix': 'run-42'}, 400), ({'bucket': 'no-such-bucket'}, 404), ({'mode': 'admin'}, 422)])
 def test_invalid_input_rejected(client, over, code):
     """protects=safe_bucket/safe_key at the trust boundary and bucket existence; fails_when=a bad scope is signed; no_claim=FakeS3 stands in for SeaweedFS."""
     c, csrf = client

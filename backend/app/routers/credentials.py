@@ -25,6 +25,9 @@ def issue_credential(body: CredentialRequest, _sess: dict = Depends(require_writ
         raise HTTPException(503, 'Agent credentials are not configured (set CRED_SIGNING_KEY, 32+ characters)')
     safe_bucket(body.bucket)
     safe_key(body.prefix)
+    # Without a trailing slash, prefix 'run-42' would also cover 'run-420/...'.
+    if not body.prefix.endswith('/'):
+        raise HTTPException(400, 'Prefix must end with /')
     try:
         s3.s3_client().head_bucket(Bucket=body.bucket)
     except S3_ERRORS as exc:
