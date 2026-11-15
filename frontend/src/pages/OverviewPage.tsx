@@ -19,7 +19,7 @@ type Props = {
 
 export function OverviewPage({stats, updatedAgo, uploadDays, ready, barPage, setBarPage, pageSize, changePageSize, openBucket, openPreview, nav}: Props) {
   // App currently passes aggregate counts only. Fetch the optional breakdown here
-  // so console/agent tooltips work without changing the shared App data pipeline.
+  // so console/S3 API tooltips work without changing the shared App data pipeline.
   const version = JSON.stringify(uploadDays);
   const [sourceDays, setSourceDays] = useState<{version: string; days: UploadDay[]} | null>(null);
   useEffect(() => {

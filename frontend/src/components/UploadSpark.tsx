@@ -3,6 +3,14 @@ import { plural } from '../lib/format';
 export type UploadDay = {label: string; count: number; console?: number; gateway?: number};
 export type UploadDayItem = Omit<UploadDay, 'label'> & {day: string};
 
+export const S3_UPLOAD_NOTE = 'Successful S3 PUT requests through the gateway; a multipart upload counts once per part.';
+
+export function uploadSourcesLabel(consoleTotal?: number, gatewayTotal?: number): string {
+  return consoleTotal != null && gatewayTotal != null
+    ? `Console ${consoleTotal} · S3 API ${gatewayTotal}`
+    : 'Counts console uploads and S3 API PUT requests.';
+}
+
 export function uploadCount(day: UploadDay): number {
   return day.console != null && day.gateway != null ? day.console + day.gateway : day.count;
 }
@@ -21,8 +29,8 @@ export function uploadTotals(days: UploadDay[]) {
 export function uploadDayTitle(day: UploadDay): string {
   return [
     `${day.label}: ${plural(uploadCount(day), 'upload')}`,
-    ...(day.console != null ? [`console: ${day.console}`] : []),
-    ...(day.gateway != null ? [`agents: ${day.gateway}`] : []),
+    ...(day.console != null ? [`Console: ${day.console}`] : []),
+    ...(day.gateway != null ? [`S3 API: ${day.gateway}`, S3_UPLOAD_NOTE] : []),
   ].join(' · ');
 }
 
@@ -41,17 +49,15 @@ export function UploadSpark({days}: {days: UploadDay[]}) {
   if (empty) {
     return <div className="upload-empty">
       <p>No uploads in the last 14 days.</p>
-      <small>Counts console and agent uploads.</small>
+      <small title={S3_UPLOAD_NOTE}>Counts console uploads and S3 API PUT requests.</small>
     </div>;
   }
   return <div>
-    <div className="spark-wrap"><span className="spark-max" aria-hidden="true">{max}</span><div className="spark" role="img" aria-label={`Uploads: ${plural(total, 'upload')} in the last 14 days${peak ? `, most on ${peak.label}` : ''}. Counts console and agent uploads.`}>
+    <div className="spark-wrap"><span className="spark-max" aria-hidden="true">{max}</span><div className="spark" role="img" aria-label={`Uploads: ${plural(total, 'upload')} in the last 14 days${peak ? `, most on ${peak.label}` : ''}. Counts console uploads and S3 API PUT requests.`}>
       {days.map(day => <div key={day.label} className="spark-bar" title={uploadDayTitle(day)}
         style={{height: `${uploadCount(day) > 0 ? Math.max(8, Math.round(uploadCount(day) / max * 100)) : 3}%`}} />)}
     </div></div>
     <p className="muted small spark-cap">{plural(total, 'upload')} in the last 14 days{peak ? ` · busiest ${peak.label}` : ''}</p>
-    <p className="muted small upload-sources">{consoleTotal != null && gatewayTotal != null
-      ? `Console: ${plural(consoleTotal, 'upload')} · Agents: ${plural(gatewayTotal, 'upload')}`
-      : 'Counts console and agent uploads.'}</p>
+    <p className="muted small upload-sources" title={S3_UPLOAD_NOTE}>{uploadSourcesLabel(consoleTotal, gatewayTotal)}</p>
   </div>;
 }
