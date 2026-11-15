@@ -93,14 +93,16 @@ func readAuth(r *http.Request) (authentication, error) {
 	}
 	a.validity = validity
 	sig, err := hex.DecodeString(a.signature)
-	if err != nil || len(sig) != sha256.Size || a.signature != strings.ToLower(a.signature) || a.token == "" {
+	if err != nil || len(sig) != sha256.Size || a.signature != strings.ToLower(a.signature) {
 		return a, signatureError()
 	}
 	return a, nil
 }
 
 // Verify authenticates a scoped credential and SigV4 request, then enforces
-// scope. On allow it returns claims; on denial it returns an S3 *Error.
+// scope (except for authenticated master requests). On allow it returns claims
+// and sets X-Amz-Content-Sha256 to the verified payload hash or UNSIGNED-PAYLOAD;
+// on denial it returns an S3 *Error.
 // A hashed payload is read and restored in memory. UNSIGNED-PAYLOAD is not read.
 // The caller must preserve the unmodified path-style URL and impose its own
 // transport/body limits when this core is wired to a server.
@@ -113,9 +115,16 @@ func (v *Verifier) Verify(r *http.Request, now time.Time) (Claims, error) {
 	if err != nil {
 		return empty, err
 	}
-	c, err := v.Token(a.token, now)
-	if err != nil {
-		return empty, err
+	kid, _, _ := strings.Cut(a.credential, "/")
+	master := a.token == "" && v.masterAccess != "" && kid == v.masterAccess
+	c := Claims{Kid: kid}
+	secret := v.masterSecret
+	if !master {
+		c, err = v.Token(a.token, now)
+		if err != nil {
+			return empty, err
+		}
+		secret = v.Secret(c.Kid)
 	}
 	if a.date.After(now.Add(ExpirySkew)) || now.After(a.date.Add(a.validity).Add(ExpirySkew)) {
 		return empty, signatureError()
@@ -188,7 +197,7 @@ func (v *Verifier) Verify(r *http.Request, now time.Time) (Claims, error) {
 	if !host || (!a.presigned && !dateSigned) {
 		return empty, signatureError()
 	}
-	creds := aws.Credentials{AccessKeyID: c.Kid, SecretAccessKey: v.Secret(c.Kid)}
+	creds := aws.Credentials{AccessKeyID: c.Kid, SecretAccessKey: secret}
 	signer := v4.NewSigner(func(o *v4.SignerOptions) {
 		o.DisableURIPathEscaping = true
 		o.DisableHeaderHoisting = true
@@ -228,8 +237,16 @@ func (v *Verifier) Verify(r *http.Request, now time.Time) (Claims, error) {
 	if !hmac.Equal([]byte(expected), []byte(a.signature)) {
 		return empty, signatureError()
 	}
-	if err := Scope(r, c); err != nil {
+	if master {
+		for name := range r.Header {
+			if strings.EqualFold(name, "X-Amz-Copy-Source") {
+				return empty, unsupported()
+			}
+		}
+	} else if err := Scope(r, c); err != nil {
 		return empty, err
 	}
+	// Publish the verified hash for the forwarding signer, including implicit hashes.
+	r.Header.Set("X-Amz-Content-Sha256", payload)
 	return c, nil
 }
