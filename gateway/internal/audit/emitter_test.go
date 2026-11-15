@@ -361,7 +361,7 @@ func TestRetryPolicy(t *testing.T) {
 		}
 	})
 
-	t.Run("5xx gives up after one retry", func(t *testing.T) {
+	t.Run("5xx gives up after four attempts", func(t *testing.T) {
 		var hits atomic.Int32
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			_, _ = io.Copy(io.Discard, r.Body)
@@ -379,8 +379,8 @@ func TestRetryPolicy(t *testing.T) {
 		})
 		em.Emit(Event{Method: "GET", Key: "give-up"})
 		finish(t, em)
-		if got := hits.Load(); got != 2 {
-			t.Fatalf("attempts = %d, want 2", got)
+		if got := hits.Load(); got != 4 {
+			t.Fatalf("attempts = %d, want 4", got)
 		}
 	})
 
