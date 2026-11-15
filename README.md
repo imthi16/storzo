@@ -18,6 +18,7 @@
   <a href="#features">Features</a> ·
   <a href="#architecture">Architecture</a> ·
   <a href="#use-your-s3-sdk">S3 SDK</a> ·
+  <a href="#agent-access-in-progress">Agent access</a> ·
   <a href="#documentation">Documentation</a>
 </p>
 
@@ -37,6 +38,7 @@ Storzo brings bucket browsing, image previews, uploads and an audit trail into o
 | **Storage overview** | Inspect bucket usage, file-type mix and recent objects through the console. |
 | **Admin sessions & audit** | Sign in with an HttpOnly signed cookie; management writes use CSRF protection and activity is recorded in SQLite. |
 | **S3 SDK access** | Connect applications directly to the upstream SeaweedFS S3 endpoint. |
+| **Scoped agent credentials** *(in progress)* | Issue short-lived keys limited to one bucket prefix, read-only or read-write. Issuing and verification are built; the enforcing gateway is not. See [Agent access](#agent-access-in-progress). |
 | **Self-hosted deployment** | Start with Docker Compose; explore Kubernetes using the starter Helm chart. |
 
 SHA-256 metadata is recorded for console uploads. Overview scans are capped at 3,000 objects and marked partial when capped; they are not an authoritative disk or billing meter.
@@ -141,6 +143,37 @@ print(s3.list_objects_v2(Bucket="demo-images"))
 
 Within the Compose network, use `http://storage:8333`. Presigned browser links must use an endpoint reachable by the browser, configured through `S3_PUBLIC_ENDPOINT`. Validate the S3 operations your application needs against SeaweedFS before migrating.
 
+## Agent access (in progress)
+
+The goal: hand an AI agent a credential that can reach **one bucket prefix**, read-only or read-write, and stops working on its own (15 minutes by default, 1 hour at most), while your master S3 key stays private. The full design is in the [agent gateway spec](docs/SPEC-agent-gateway.md).
+
+| Piece | State |
+| --- | --- |
+| `POST /api/credentials` issues an access key, secret and session token | Built. Needs a console login and CSRF token; the prefix must end in `/`. |
+| Credential verification (token, SigV4 signature, scope rules) in [`gateway/internal/verify`](gateway/README.md) | Built as a Go library with tests. Not a running server. |
+| `storzo-mcp`, a stdio [MCP](https://modelcontextprotocol.io) server with `list_objects` and `get_object`, plus `put_object` and `delete_object` for `rw` credentials | Built. Tested against a fake S3 only. |
+| `POST /api/internal/audit` ingests gateway audit events (HMAC-signed, blocked at the nginx edge) | Built. |
+| Gateway proxy in front of SeaweedFS, SeaweedFS made internal-only, audit emission | **Not built.** |
+
+> **Scoped credentials are not a security boundary yet.** No running component accepts or enforces them, and `:8333` still takes the master key. Do not treat an issued credential as protection until the gateway proxy ships.
+
+Issue a credential (signed in, with the CSRF token from your session):
+
+```http
+POST /api/credentials
+{"bucket": "agent-data", "prefix": "run-42/", "mode": "ro", "ttl_seconds": 900}
+```
+
+The response carries `access_key_id`, `secret_access_key`, `session_token`, `expires_at` and `endpoint`. The endpoint needs `CRED_SIGNING_KEY` (32+ characters). `scripts/setup_env.py` generates one for a new `.env`; an older `.env` needs it added by hand, or the endpoint answers 503.
+
+To try the MCP server, build it with Go 1.25+ and pass the issued values as environment variables:
+
+```bash
+cd gateway && go build -o storzo-mcp ./cmd/storzo-mcp
+# Required: STORZO_ENDPOINT, STORZO_ACCESS_KEY_ID, STORZO_SECRET_ACCESS_KEY,
+#           STORZO_SESSION_TOKEN, STORZO_BUCKET, STORZO_PREFIX, STORZO_MODE (ro or rw)
+```
+
 ## Development & verification
 
 Run backend tests with a fake S3 adapter; no Docker is needed:
@@ -159,6 +192,13 @@ npm install
 npm run build
 ```
 
+Test the gateway Go module (verification library and MCP server):
+
+```bash
+cd gateway
+go vet ./... && go test ./...
+```
+
 Against a running local Docker stack, install `boto3` on the host and run from the repository root:
 
 ```bash
@@ -169,7 +209,7 @@ bash scripts/verify_restart.sh
 
 For the combined Docker build, S3 smoke and restart/checksum workflow, use `bash scripts/demo_verify.sh`. These integration checks create test data and restart services; use a demo environment.
 
-CI defines backend tests, a frontend build and Compose configuration validation. Historical results and remaining acceptance gates are recorded in [build verification](docs/BUILD_VERIFICATION.md); they are not evidence of production readiness.
+CI runs `ruff`, `mypy` and `pytest` (85% coverage floor) with `pip-audit` for the backend; lint, tests, build and `npm audit` for the frontend; an image build with a Trivy scan; Helm lint; and Compose validation. **There is no Go job yet**, so run the gateway tests locally. Historical results and remaining acceptance gates are recorded in [build verification](docs/BUILD_VERIFICATION.md); they are not evidence of production readiness.
 
 ## Project status
 
@@ -182,6 +222,7 @@ Storzo is an **MVP for isolated evaluation**, including a possible MinIO migrati
 | Compatibility | S3 behavior is supplied by SeaweedFS; MinIO feature parity is not established. |
 | Security | TLS ingress, rate limiting, external secret management and security review remain production requirements. |
 | Recovery | A same-host cold backup/restore drill script exists; off-host recovery and RPO/RTO targets remain unproven. |
+| Agent access | Credential issuing, the verification library and the MCP server are merged. The gateway that enforces them is not built, and none of it has run against a live SeaweedFS. |
 
 Versioned-bucket deletes can create delete markers instead of reclaiming storage immediately. Self-hosting also carries server, disk, backup, network and maintenance costs.
 
@@ -222,6 +263,8 @@ Open `http://localhost:8088`. Production deployment needs TLS ingress, external 
 | [Demo walkthrough](docs/TL_DEMO.md) | A five-minute demonstration and acceptance script |
 | [Architecture](docs/ARCHITECTURE.md) | Storage, management plane and trust boundaries |
 | [Feature matrix](docs/FEATURE_MATRIX.md) | Implemented, upstream-provided and planned capabilities |
+| [Agent gateway spec](docs/SPEC-agent-gateway.md) | Scoped credentials, scope rules, MCP server and acceptance criteria |
+| [Gateway verification core](gateway/README.md) | How tokens and SigV4 signatures are verified, and what is not covered |
 | [Deployment configuration](deploy/) | Starter Helm chart and SeaweedFS demo values |
 | [Migration](docs/MIGRATION.md) | Staged MinIO evaluation and cutover requirements |
 | [Security checklist](docs/SECURITY_CHECKLIST.md) | Requirements before production exposure |
