@@ -100,3 +100,89 @@ jobs:
       - run: cd gateway && go vet ./...
       - run: cd gateway && go test -race -count=1 ./...
       - run: cd gateway && go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12'
+      - name: Generate .env and export masked secrets
+        run: |
+          python scripts/setup_env.py
+          while IFS= read -r line || [ -n "$line" ]; do
+            case "$line" in
+              ADMIN_PASSWORD=*|S3_ACCESS_KEY=*|S3_SECRET_KEY=*|CRED_SIGNING_KEY=*)
+                key=${line%%=*}
+                value=${line#*=}
+                echo "::add-mask::${value}"
+                echo "${key}=${value}" >> "$GITHUB_ENV"
+                ;;
+            esac
+          done < .env
+      - name: Start stack and wait for ready
+        run: |
+          docker compose up -d --build
+          deadline=$((SECONDS + 150))
+          while [ "$SECONDS" -lt "$deadline" ]; do
+            code=$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 2 --max-time 5 http://127.0.0.1:8088/api/health/ready || true)
+            if [ "$code" = "200" ]; then
+              exit 0
+            fi
+            remaining=$((deadline - SECONDS))
+            if [ "$remaining" -le 0 ]; then
+              break
+            fi
+            if [ "$remaining" -lt 3 ]; then
+              sleep "$remaining"
+            else
+              sleep 3
+            fi
+          done
+          docker compose ps
+          docker compose logs --tail=80
+          exit 1
+      - name: Gateway acceptance
+        env:
+          CONSOLE_URL: http://127.0.0.1:8088
+          S3_URL: http://127.0.0.1:8333
+          ADMIN_USER: admin
+          ADMIN_PASSWORD: ${{ env.ADMIN_PASSWORD }}
+          S3_ACCESS_KEY: ${{ env.S3_ACCESS_KEY }}
+          S3_SECRET_KEY: ${{ env.S3_SECRET_KEY }}
+          BUCKET: demo-images
+          CRED_SIGNING_KEY: ${{ env.CRED_SIGNING_KEY }}
+        run: |
+          pip install 'boto3==1.44.1'
+          python scripts/gateway_e2e.py
+      - name: Playwright
+        env:
+          E2E_ADMIN_PASSWORD: ${{ env.ADMIN_PASSWORD }}
+        run: |
+          cd frontend
+          npm ci --no-audit --no-fund && npx playwright install --with-deps chromium
+          npx playwright test --reporter=list,html
+      - name: Save compose logs
+        if: failure()
+        run: docker compose logs > e2e-compose-logs.txt
+      - name: Upload e2e failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: e2e-failure
+          retention-days: 7
+          if-no-files-found: warn
+          path: |
+            frontend/playwright-report
+            frontend/test-results
+            e2e-compose-logs.txt
+      - name: Tear down stack
+        if: always()
+        run: docker compose down -v
