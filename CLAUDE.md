@@ -34,13 +34,15 @@ bash scripts/k8s_demo_install.sh    # Kubernetes demo (needs BACKEND_IMAGE / FRO
 ```
 
 ```bash
-# Gateway (Go module: verification library + storzo-mcp). CI runs gofmt, vet and race tests for the gateway.
+# Gateway (Go module: verification, proxy, audit emitter, storzo-mcp). CI runs gofmt, vet and race tests for it.
 cd gateway && gofmt -l . && go vet ./... && go test -count=1 ./...
 # Regenerate cross-language test vectors from the real Python issuer and botocore signer:
 cd backend && python3 tests/gateway_vectors.py
+# Acceptance script against a running stack (needs ADMIN_PASSWORD, S3 keys; CRED_SIGNING_KEY for the expired-token case):
+python3 scripts/gateway_e2e.py            # --self-test checks its audit-coverage matcher offline
 ```
 
-CI (`.github/workflows/ci.yml`) runs backend ruff + mypy + pytest (85% coverage) + pip-audit, frontend lint/test/build/audit, image build + Trivy, Helm lint, and `setup_env.py` + compose config validation. Never run `docker compose down -v` on data you care about — it deletes the named volumes.
+CI (`.github/workflows/ci.yml`) runs backend ruff + mypy + pytest (85% coverage) + pip-audit, frontend lint/test/build/audit, image build (backend, frontend, gateway) + Trivy, Helm lint, gateway gofmt/vet/race tests, and `setup_env.py` + compose config validation. Never run `docker compose down -v` on data you care about — it deletes the named volumes.
 
 ## Architecture
 
@@ -52,7 +54,7 @@ CI (`.github/workflows/ci.yml`) runs backend ruff + mypy + pytest (85% coverage)
   - Audit trail is SQLite (`audit` table, WAL) written via `db.audit()`. Single writer → the Helm chart pins the backend to one replica.
   - Thumbnails are generated on demand to WebP via Pillow with pixel/size caps; originals are never modified. Dashboard scans at most 3,000 objects and reports partial results.
 - **`backend/tests/test_api.py`** — sets env vars *before* importing `app`, then swaps `s3.s3_client` for a `FakeS3`. Extend `FakeS3` when a new route calls a new boto3 method.
-- **`gateway/`** — Go module `github.com/imthi16/storzo/gateway`. `internal/verify` verifies agent credentials (token HMAC, SigV4 via the AWS SDK signer, scope matrix) as a library; there is no server or proxy yet. `cmd/storzo-mcp` is a stdio MCP server that is only a thin S3 client (scope is meant to be enforced by the gateway, not there). Cross-language fixtures live in `internal/verify/testdata/python.json`.
+- **`gateway/`** — Go module `github.com/imthi16/storzo/gateway`. `cmd/storzo-gateway` is the S3 proxy that sits in front of SeaweedFS (Compose service `gateway` on `:8333`; storage publishes no port). `internal/verify` verifies scoped credentials (token HMAC, SigV4 via the AWS SDK signer, scope matrix; `Claims.Master` is set only after master SigV4 verification); `internal/proxy` re-signs allowed requests with the master key and, for scoped credentials, forwards only an `x-amz-*` allowlist; `internal/audit` batches events to `POST /api/internal/audit` (HMAC over `<timestamp>.<body>`). Env: `STORAGE_ENDPOINT`, `STORAGE_ACCESS_KEY`, `STORAGE_SECRET_KEY`, `CRED_SIGNING_KEY` (32+), `AUDIT_URL` (all required), optional `GATEWAY_LISTEN`, `GATEWAY_MAX_HASHED_BODY_MB`. `cmd/storzo-mcp` is a stdio MCP server that is only a thin S3 client; scope is enforced by the gateway. Cross-language fixtures: `internal/verify/testdata/python.json`. Docker image uses Go 1.26.11 (stdlib CVEs fixed only there; `go.mod` stays 1.25.0).
 - **`frontend/src/`** — React 19 + Vite + TypeScript console. `main.tsx` mounts `App.tsx` (state, effects, handlers); `pages/` (Login, Overview, Buckets, ActivityList, ActivityEvent, Settings), `components/` (AppDialog, Pager, RefRow, ActivityDetail, TypeDonut, UploadSpark), `api/` (`client.ts` fetch + friendly `ApiError`, `upload.ts` XHR progress), `lib/` (format helpers, hash routes), `types.ts`, `constants.ts`, `style.css`. Icons from `lucide-react`. nginx (`frontend/nginx.conf`) serves the build and proxies `/api/` to `BACKEND_UPSTREAM`. E2E specs live in `frontend/e2e` (`npm run e2e`, needs `E2E_ADMIN_PASSWORD`).
 - **Deploy**: `compose.yaml` (storage + backend + frontend, volumes `storage-data` and `audit-data`, ports bound to loopback by default); `deploy/helm/storzo` is the chart for backend/frontend only — SeaweedFS itself is installed from its official chart with `deploy/seaweedfs-values-demo.yaml` by `scripts/k8s_demo_install.sh`.
 - **`docs/`** — `ARCHITECTURE.md`, `SECURITY_CHECKLIST.md`, `MIGRATION.md`, `FEATURE_MATRIX.md`, `TL_DEMO.md`. README is deliberately conservative about production-readiness claims; keep new docs/claims consistent with that.

@@ -14,10 +14,11 @@
 - [ ] Test power-loss/crash failure with actual disk sync guarantees, full disks, network partitions, node failover, upgrades/rollbacks.
 - [ ] Confirm legal/compliance requirements: retention, legal hold, deletion, encryption, privacy and audit retention.
 - [ ] Expose the web UI only through trusted TLS ingress; configure WAF/rate limits as required.
-- [ ] Before giving any agent a scoped credential: ship the gateway proxy that enforces it and make SeaweedFS internal-only. Until then the credential is not a boundary and `:8333` still takes the master key.
-- [ ] Independent security review of `gateway/internal/verify` (token, SigV4, scope). Only automated review has run so far.
-- [ ] Set `CRED_SIGNING_KEY` (32+ characters) and plan its rotation. It signs agent tokens and authenticates audit ingest; the endpoints refuse to work without it.
-- [ ] Harden audit ingest: replay protection, length limits on event fields, and keep the backend unreachable except through nginx (`/api/internal/` is blocked there only).
+- [ ] Independent human or third-party security review of the gateway (`gateway/internal/verify`, `proxy`) and the audit ingest. So far: unit and mutation tests plus cross-review by other AI agents, which found 10 issues, all fixed, and raised one Kubernetes concern that is still open. No human review has happened.
+- [ ] Kubernetes: add NetworkPolicies so only the gateway and backend can reach SeaweedFS (S3 and filer). The demo installs none, so another pod may read objects directly and bypass scope and audit. Unverified; prove it on a pinned chart first.
+- [ ] Set `CRED_SIGNING_KEY` (32+ characters) from a secrets manager and plan its rotation. It signs agent tokens and audit ingest; there is no revoke-before-expiry, so rotation (restart backend and gateway) is the kill switch.
+- [ ] Test your real SDKs and tools against the gateway over HTTPS (AWS CLI, aws-sdk-go-v2, `aws-chunked` streaming uploads return 501, range requests, concurrency) and measure throughput under load. Only boto3 over HTTP was tested.
+- [ ] Audit durability: events are queued (10,000), retried 4 times and then counted as failed; there is no disk spool, so a long backend outage loses audit rows. Keep the backend unreachable except through nginx; replay inside the 300 s window is accepted.
 
 ## Already present in the MVP source
 
@@ -26,12 +27,15 @@
 - [x] Object key/bucket validation in management API; image preview restricted to raster MIME types.
 - [x] SeaweedFS S3 local binding defaults to 127.0.0.1 for Compose.
 - [x] Container state is volume-mounted, and admin action audit is persisted separately.
-- [x] Agent credentials are signed, bound to one bucket and prefix (trailing `/` required), expire within 1 hour, and issuing is audited. Verification code exists; enforcement does not (see above).
+- [x] Agent credentials are signed, bound to one bucket and prefix (trailing `/` required), expire within 1 hour, and issuing is audited. The Go gateway enforces them; in Compose SeaweedFS publishes no host port (verified with `scripts/gateway_e2e.py` and a port check). Scoped requests forward only an `x-amz-*` allowlist, so they cannot set object-lock, ACL or encryption headers with the master key.
+- [x] Audit ingest authenticates before reading the body: key length, timestamp window, and a 64-hex signature over `<timestamp>.<body>`, then a 4 MiB streamed cap.
 
 ## Known limitations
 
 - Single admin account only; no password rotation UI or OIDC/MFA.
-- S3 access through the **native gateway** is not logged to the UI's SQLite audit. Native gateway logs must be centralized separately for enterprise audit.
+- Gateway requests (allowed and denied) are written to the SQLite audit trail by best-effort batches; denied requests have an empty `kid`. Access that bypasses the gateway (Kubernetes without NetworkPolicy, or direct access to storage) is not logged.
+- Master-key applications pass through the gateway without scope checks; ACL and grant headers are stripped for them too.
+- `aws-chunked` streaming uploads and CopyObject return 501 through the gateway.
 - Backend upload hashes data before pushing it, but full integrity and durability are not proven until read-back and restore testing.
 - The SeaweedFS Helm demo chart is single-node by choice; an existing cluster alone does not provide storage HA.
 - Helm release history can contain rendered secret values with this demo script, so this script is unsuitable for strict production secret handling.
