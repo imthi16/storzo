@@ -8,7 +8,7 @@ export function TypeDonut({data}: {data: TypeStat[]}) {
   return <div className="type-mix">
     <div className="type-total"><strong>{bytes(total)}</strong><small>stored, by file type</small></div>
     <div className="type-bar" role="img" aria-label={`Storage by file type. ${summary}`}>
-      {data.map(d => <span key={d.type} style={{flexGrow: Math.max(d.bytes, 1), background: TYPE_COLORS[d.type]}} />)}
+      {data.map(d => <span key={d.type} aria-hidden="true" title={`${d.type}: ${plural(d.count, 'file')}, ${bytes(d.bytes)}`} style={{flexGrow: Math.max(d.bytes, 1), background: TYPE_COLORS[d.type]}} />)}
     </div>
     <ul className="legend">{data.map(d =>
       <li key={d.type}><span className="swatch" style={{background: TYPE_COLORS[d.type]}} aria-hidden="true" /><strong>{d.type}</strong><small>{plural(d.count, 'file')} · {bytes(d.bytes)}</small></li>)}

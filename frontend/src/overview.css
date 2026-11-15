@@ -1,0 +1,74 @@
+/* Overview-only overrides: shared page styles remain owned by the theme. */
+.overview-grid {
+  display: grid;
+  gap: 16px;
+  margin-top: 16px;
+  align-items: start;
+  min-width: 0;
+}
+
+.overview-grid .two-col {
+  margin-top: 0;
+  align-items: start;
+}
+
+.overview-grid .panel {
+  align-self: start;
+  height: auto;
+  min-height: 0;
+  background: var(--rack);
+}
+
+/* Override the global 300px fixed list height without changing other pages. */
+.overview-grid .bar-list {
+  height: auto;
+  max-height: 300px;
+}
+
+.overview-grid .upload-empty {
+  min-height: 80px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 0;
+}
+
+.overview-grid .upload-empty p {
+  margin: 0;
+  color: var(--text-2);
+  font-size: 13px;
+}
+
+.overview-grid .upload-empty small {
+  color: var(--text-3);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.overview-grid .spark {
+  border-bottom: 1px solid var(--text-3);
+}
+
+.overview-grid .upload-sources {
+  margin-top: 4px;
+}
+
+.overview-grid .type-bar {
+  gap: 2px;
+}
+
+.overview-grid .legend li {
+  flex-wrap: wrap;
+}
+
+@media (max-width: 820px) {
+  .overview-grid .two-col {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .overview-grid .bar-list {
+    max-height: none;
+    overflow: visible;
+  }
+}

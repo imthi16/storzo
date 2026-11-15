@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import { Activity, ChevronRight, Database, File as FileIcon, HardDrive, Image, ShieldCheck, UploadCloud } from 'lucide-react';
 import type { Obj, Stats, Page } from '../types';
 import { plural, bytes } from '../lib/format';
@@ -5,15 +6,35 @@ import { PAGE_SIZES } from '../constants';
 import { Pager } from '../components/Pager';
 import { RefRow } from '../components/RefRow';
 import { TypeDonut } from '../components/TypeDonut';
-import { UploadSpark } from '../components/UploadSpark';
+import { UploadSpark, toUploadDays } from '../components/UploadSpark';
+import type { UploadDay, UploadDayItem } from '../components/UploadSpark';
+import { call } from '../api/client';
+import '../overview.css';
 
 type Props = {
-  stats: Stats | null; updatedAgo: number | null; uploadDays: {label: string; count: number}[]; ready: 'checking' | 'online' | 'offline';
+  stats: Stats | null; updatedAgo: number | null; uploadDays: UploadDay[]; ready: 'checking' | 'online' | 'offline';
   barPage: number; setBarPage: (n: number) => void; pageSize: number; changePageSize: (n: number) => void;
   openBucket: (name: string) => void; openPreview: (obj: Obj, bucket: string) => void; nav: (p: Page) => void;
 };
 
 export function OverviewPage({stats, updatedAgo, uploadDays, ready, barPage, setBarPage, pageSize, changePageSize, openBucket, openPreview, nav}: Props) {
+  // App currently passes aggregate counts only. Fetch the optional breakdown here
+  // so console/agent tooltips work without changing the shared App data pipeline.
+  const version = JSON.stringify(uploadDays);
+  const [sourceDays, setSourceDays] = useState<{version: string; days: UploadDay[]} | null>(null);
+  useEffect(() => {
+    const controller = new AbortController();
+    call<{items: UploadDayItem[]}>('/audit/uploads-by-day?days=14', undefined, {signal: controller.signal})
+      .then(data => {
+        if (!controller.signal.aborted) setSourceDays({version, days: toUploadDays(data.items)});
+      })
+      .catch(() => {
+        // The aggregate props remain usable if the optional breakdown cannot load.
+        if (!controller.signal.aborted) setSourceDays(null);
+      });
+    return () => controller.abort();
+  }, [version]);
+  const chartDays = sourceDays?.version === version ? sourceDays.days : uploadDays;
   return <>
         <div className="heading"><div><h1>Storage overview</h1><p>All your files in one place, running on your infrastructure.{updatedAgo != null && <span className="muted"> Updated {updatedAgo}s ago · auto-refreshes while visible.</span>}</p></div><button className="primary" onClick={()=>nav('buckets')}><Database size={17}/> Browse files</button></div>
         {stats?.sampled && stats.message ? <div className="sample-note" role="note">{stats.message}</div> : null}
@@ -24,8 +45,9 @@ export function OverviewPage({stats, updatedAgo, uploadDays, ready, barPage, set
           <div className="stat"><div className="stat-head"><span>Data scanned</span></div><strong>{bytes(stats.total_bytes)}</strong><small>{stats.sampled ? 'Approximate, partial scan' : 'Total visible object size'}</small></div>
           <div className="stat"><div className="stat-head"><span>Image assets</span></div><strong>{stats.image_count}</strong><small>JPG, PNG, WebP, GIF and AVIF</small></div>
         </div>
+        <div className="overview-grid">
         <div className="two-col">
-          <section className="panel"><div className="panel-title"><h2>Upload activity, last 14 days</h2><Activity size={19}/></div><UploadSpark days={uploadDays} /></section>
+          <section className="panel"><div className="panel-title"><h2>Uploads, last 14 days</h2><Activity size={19}/></div><UploadSpark days={chartDays} /></section>
           <section className="panel system-panel"><div className="panel-title"><h2>System health</h2><ShieldCheck size={19}/></div><div className="health-item"><span>Object storage (S3)</span><strong className={ready==='online'?'good':'bad'}><i className={`led ${ready==='online'?'online':ready==='offline'?'offline':''}`}/>{ready==='online'?'Connected':ready==='offline'?'Unreachable':'Checking'}</strong></div><p className="panel-note">Single-node demo setup: arrange separate backups before putting critical data here.</p></section>
         </div>
         <div className="two-col">
@@ -59,6 +81,7 @@ export function OverviewPage({stats, updatedAgo, uploadDays, ready, barPage, set
             : stats.largest.length === 0 ? <div className="empty slim"><HardDrive size={24}/><p>No objects stored yet.</p></div>
             : <ul className="ref-list">{stats.largest.slice(0, 5).map(r => <RefRow key={`${r.bucket}/${r.key}`} r={r} onOpenBucket={openBucket} onPreview={x => openPreview({key: x.key, size: x.size, modified: x.modified, etag: ''}, x.bucket)} />)}</ul>}
           </section>
+        </div>
         </div>
         </>}
   </>;
