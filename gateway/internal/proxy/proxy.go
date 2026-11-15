@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -31,11 +32,14 @@ func (noop) Emit(Event) {}
 type Config struct {
 	Listen, StorageEndpoint, StorageAccessKey, StorageSecretKey, CredSigningKey, AuditURL string
 	MaxHashedBodyBytes                                                                    int64
+	RateLimit                                                                             float64 // requests per second per verified scoped kid; zero disables
+	RateBurst                                                                             int
+	RateClock                                                                             func() time.Time // optional limiter clock; nil uses time.Now
 }
 
 // ConfigFromEnv validates configuration without including secret values in errors.
 func ConfigFromEnv() (Config, error) {
-	c := Config{AuditURL: os.Getenv("AUDIT_URL"), Listen: os.Getenv("GATEWAY_LISTEN"), StorageEndpoint: os.Getenv("STORAGE_ENDPOINT"), StorageAccessKey: os.Getenv("STORAGE_ACCESS_KEY"), StorageSecretKey: os.Getenv("STORAGE_SECRET_KEY"), CredSigningKey: os.Getenv("CRED_SIGNING_KEY")}
+	c := Config{RateLimit: defaultRateLimit, RateBurst: defaultRateBurst, AuditURL: os.Getenv("AUDIT_URL"), Listen: os.Getenv("GATEWAY_LISTEN"), StorageEndpoint: os.Getenv("STORAGE_ENDPOINT"), StorageAccessKey: os.Getenv("STORAGE_ACCESS_KEY"), StorageSecretKey: os.Getenv("STORAGE_SECRET_KEY"), CredSigningKey: os.Getenv("CRED_SIGNING_KEY")}
 	var missing []string
 	for _, item := range []struct{ name, value string }{{"STORAGE_ENDPOINT", c.StorageEndpoint}, {"STORAGE_ACCESS_KEY", c.StorageAccessKey}, {"STORAGE_SECRET_KEY", c.StorageSecretKey}, {"CRED_SIGNING_KEY", c.CredSigningKey}, {"AUDIT_URL", c.AuditURL}} {
 		if item.value == "" {
@@ -60,6 +64,20 @@ func ConfigFromEnv() (Config, error) {
 			return c, errors.New("invalid GATEWAY_MAX_HASHED_BODY_MB")
 		}
 	}
+	if raw := os.Getenv("GATEWAY_RATE_LIMIT"); raw != "" {
+		value, err := strconv.ParseFloat(raw, 64)
+		if err != nil {
+			return c, errors.New("invalid GATEWAY_RATE_LIMIT: expected a finite nonnegative number")
+		}
+		c.RateLimit = value
+	}
+	if raw := os.Getenv("GATEWAY_RATE_BURST"); raw != "" {
+		value, err := strconv.Atoi(raw)
+		if err != nil {
+			return c, errors.New("invalid GATEWAY_RATE_BURST: expected an integer")
+		}
+		c.RateBurst = value
+	}
 	c.MaxHashedBodyBytes = mb * (1 << 20)
 	return c, validate(c)
 }
@@ -78,6 +96,12 @@ func validate(c Config) error {
 	if len([]rune(c.CredSigningKey)) < 32 {
 		return errors.New("CRED_SIGNING_KEY must contain at least 32 characters")
 	}
+	if c.RateLimit < 0 || math.IsNaN(c.RateLimit) || math.IsInf(c.RateLimit, 0) {
+		return errors.New("invalid GATEWAY_RATE_LIMIT: expected a finite nonnegative number")
+	}
+	if c.RateBurst < 0 || (c.RateLimit > 0 && c.RateBurst < 1) {
+		return errors.New("invalid GATEWAY_RATE_BURST: must be at least 1 when rate limiting is enabled")
+	}
 	if c.MaxHashedBodyBytes < 0 {
 		return errors.New("invalid GATEWAY_MAX_HASHED_BODY_MB")
 	}
@@ -89,6 +113,7 @@ type Handler struct {
 	upstream *httputil.ReverseProxy
 	auditor  Auditor
 	maxBody  int64
+	limiter  *rateLimiter
 }
 
 func New(c Config, auditor Auditor) (*Handler, error) {
@@ -146,7 +171,7 @@ func New(c Config, auditor Auditor) (*Handler, error) {
 		ErrorLog:      log.New(io.Discard, "", 0),
 		FlushInterval: -1,
 	}
-	return &Handler{v, rp, auditor, c.MaxHashedBodyBytes}, nil
+	return &Handler{verifier: v, upstream: rp, auditor: auditor, maxBody: c.MaxHashedBodyBytes, limiter: newRateLimiter(c.RateLimit, c.RateBurst, c.RateClock)}, nil
 }
 
 type signingTransport struct {
@@ -199,7 +224,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s3err.Write(rw)
 		return
 	}
-	event.Kid, event.Decision = claims.Kid, "allow"
+	event.Kid = claims.Kid
+	// Only a successfully verified scoped identity may spend its bucket.
+	if !claims.Master && !h.limiter.allow(claims.Kid) {
+		rw.Header().Set("Retry-After", "1")
+		(&verify.Error{Status: 503, Code: "SlowDown", Message: "Please reduce your request rate."}).Write(rw)
+		return
+	}
+	event.Decision = "allow"
 	if !claims.Master {
 		for name := range r.Header {
 			lower := strings.ToLower(name)
