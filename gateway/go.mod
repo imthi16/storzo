@@ -1,6 +1,6 @@
 module github.com/imthi16/storzo/gateway
 
-go 1.25.0
+go 1.26.11
 
 require (
 	github.com/aws/aws-sdk-go-v2 v1.48.0

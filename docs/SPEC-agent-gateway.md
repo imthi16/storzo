@@ -225,7 +225,7 @@ Where the implementation differs from the text above:
 - **Denied requests have an empty `kid`**, because the identity of an unauthenticated request cannot be trusted. Criterion 10 is met for decision and status, not for kid on denials.
 - **Header allowlist.** Scoped requests forward only `x-amz-meta-*`, checksum headers and the verified payload hash; ACL/grant headers are removed for all requests, including the master key's.
 - **Credential rules added:** the prefix must end in `/`; header-signed requests must sign `x-amz-security-token`.
-- **Go version.** The Docker image builds with Go 1.26.11 because several standard-library CVEs have no fix in 1.25; `go.mod` stays at 1.25.0.
+- **Go version.** The Docker image and `go.mod` use Go 1.26.11 because several standard-library CVEs have no fix in 1.25.
 - **Audit durability.** In-memory queue of 10,000, 4 attempts per batch, `Failed()` and `Dropped()` counters, drain on shutdown, no disk spool.
 
 Not done: revoke before expiry, rate limits, a console credentials form, `aws-chunked` support, an independent human security review, and a NetworkPolicy for Kubernetes.
