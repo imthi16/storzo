@@ -38,6 +38,8 @@ spec:
               valueFrom: {secretKeyRef: {name: {{ .Values.backend.secretName }}, key: S3_ACCESS_KEY}}
             - name: S3_SECRET_KEY
               valueFrom: {secretKeyRef: {name: {{ .Values.backend.secretName }}, key: S3_SECRET_KEY}}
+            - name: CRED_SIGNING_KEY
+              valueFrom: {secretKeyRef: {name: {{ .Values.backend.secretName }}, key: CRED_SIGNING_KEY}}
           volumeMounts:
             - {name: audit, mountPath: /app/state}
           readinessProbe:
