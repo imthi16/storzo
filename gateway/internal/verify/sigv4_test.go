@@ -218,6 +218,33 @@ func TestPresignLifetimeAndQuery(t *testing.T) {
 	requireCode(t, err, "SignatureDoesNotMatch")
 }
 
+// protects=end-to-end rejection of claims rewritten under the original MAC;
+// fails_when=a ro token changed to rw and a shorter prefix, signed with the original kid's secret, allows that PUT;
+// no_claim=a token whose MAC is recomputed, or master-key pass-through.
+func TestVerifyForgedClaimsPUT(t *testing.T) {
+	f := loadFixture(t)
+	v, err := New(f.SigningKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vec := f.Vectors[0]
+	if vec.Claims.Mode != "ro" {
+		t.Fatalf("fixture 0 mode = %s", vec.Claims.Mode)
+	}
+	forgedClaims := vec.Claims
+	forgedClaims.Mode = "rw"
+	forgedClaims.Prefix = vec.Claims.Prefix[:1]
+	const key = "r-other/secret"
+	if strings.HasPrefix(key, vec.Claims.Prefix) || !strings.HasPrefix(key, forgedClaims.Prefix) {
+		t.Fatalf("PUT key %q does not distinguish prefix %q from %q", key, vec.Claims.Prefix, forgedClaims.Prefix)
+	}
+	token := tokenKeepingMAC(t, vec.Token, forgedClaims)
+	now := time.Unix(f.Now, 0)
+	r := signedRequest(t, v, token, vec.AccessKey, "PUT", "/agent-data/"+key, "x", "UNSIGNED-PAYLOAD", now, false)
+	_, err = v.Verify(r, now)
+	requireCode(t, err, "SignatureDoesNotMatch")
+}
+
 // protects=payload read failures fail closed; fails_when=unreadable bodies authenticate;
 // no_claim=transport retry behavior.
 func TestBodyReadFailure(t *testing.T) {

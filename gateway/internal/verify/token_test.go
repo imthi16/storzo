@@ -98,6 +98,108 @@ func TestTokenInvalidClaims(t *testing.T) {
 	}
 }
 
+// protects=the token MAC compare, independent of base64 shape;
+// fails_when=a decoded MAC byte is flipped, re-encoded, and the unchanged claims are accepted;
+// no_claim=SigV4 or scope enforcement.
+func TestTokenMACByteFlip(t *testing.T) {
+	f := loadFixture(t)
+	v, err := New(f.SigningKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Unix(f.Now, 0)
+	for _, vec := range f.Vectors {
+		body, macSeg, ok := strings.Cut(vec.Token, ".")
+		if !ok {
+			t.Fatal("token has no MAC segment")
+		}
+		mac, err := base64.RawURLEncoding.Strict().DecodeString(macSeg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(mac) < 2 {
+			t.Fatalf("MAC too short: %d", len(mac))
+		}
+		for _, pos := range []struct {
+			name string
+			at   int
+		}{
+			{"first", 0},
+			{"middle", len(mac) / 2},
+			{"last", len(mac) - 1},
+		} {
+			t.Run(vec.Claims.Mode+"/"+pos.name, func(t *testing.T) {
+				flipped := append([]byte(nil), mac...)
+				flipped[pos.at] ^= 1
+				token := body + "." + base64.RawURLEncoding.EncodeToString(flipped)
+				_, err := v.Token(token, now)
+				if e, ok := err.(*Error); !ok || e.Code != "SignatureDoesNotMatch" {
+					t.Fatalf("position %s: %v", pos.name, err)
+				}
+			})
+		}
+	}
+}
+
+// protects=claim bytes bound by the original MAC;
+// fails_when=mode, prefix, kid, bucket or exp is rewritten and the old MAC segment is kept;
+// no_claim=a token whose MAC is recomputed over the new claims.
+func TestTokenClaimRewriteKeepsMAC(t *testing.T) {
+	f := loadFixture(t)
+	v, err := New(f.SigningKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vec := f.Vectors[0]
+	if vec.Claims.Mode != "ro" || len(vec.Claims.Prefix) < 2 {
+		t.Fatalf("fixture 0 is not a scoped read-only credential: %+v", vec.Claims)
+	}
+	now := time.Unix(f.Now, 0)
+	shorter := vec.Claims.Prefix[:1]
+	kid := []byte(vec.Claims.Kid)
+	if kid[len(kid)-1] == 'A' {
+		kid[len(kid)-1] = 'B'
+	} else {
+		kid[len(kid)-1] = 'A'
+	}
+	cases := []struct {
+		name   string
+		claims Claims
+	}{
+		{"mode-prefix", func() Claims { c := vec.Claims; c.Mode = "rw"; c.Prefix = shorter; return c }()},
+		{"kid", func() Claims { c := vec.Claims; c.Kid = string(kid); return c }()},
+		{"bucket", func() Claims { c := vec.Claims; c.Bucket = "other-data"; return c }()},
+		{"exp", func() Claims { c := vec.Claims; c.Exp = c.Iat + 3600; return c }()},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			token := tokenKeepingMAC(t, vec.Token, tc.claims)
+			_, err := v.Token(token, now)
+			if e, ok := err.(*Error); !ok || e.Code != "SignatureDoesNotMatch" {
+				t.Fatalf("%s: %v", tc.name, err)
+			}
+		})
+	}
+}
+
+// tokenKeepingMAC re-encodes claims and appends the original MAC segment.
+func tokenKeepingMAC(t *testing.T, token string, claims Claims) string {
+	t.Helper()
+	raw, err := json.Marshal(claims)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, mac, ok := strings.Cut(token, ".")
+	if !ok || mac == "" {
+		t.Fatal("token has no MAC segment")
+	}
+	forged := base64.RawURLEncoding.EncodeToString(raw) + "." + mac
+	if forged == token {
+		t.Fatal("rewrite did not change the claims segment")
+	}
+	return forged
+}
+
 // protects=S3 XML status and error codes; fails_when=SDK-readable error contract changes;
 // no_claim=SDK retry behavior.
 func TestErrorXML(t *testing.T) {
