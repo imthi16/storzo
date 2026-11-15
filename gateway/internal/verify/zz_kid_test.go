@@ -232,3 +232,118 @@ func TestKidAuthenticationFailuresAreEmpty(t *testing.T) {
 		})
 	}
 }
+
+// protects=stale/future dates with bad signatures cannot expose either scoped or master identity before signature comparison;
+// fails_when=the date-window rejection returns any claims instead of Claims{};
+// no_claim=all clock-skew boundaries or token expiry semantics beyond the existing vectors.
+func TestKidDateWindowBadSignatureEmpty(t *testing.T) {
+	f := loadFixture(t)
+	v, err := NewWithMaster(f.SigningKey, "kid-master", "kid-master-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Unix(f.Now, 0)
+	vec := f.Vectors[0]
+	if _, err := v.Token(vec.Token, now); err != nil {
+		t.Fatalf("scoped fixture must be unexpired: %v", err)
+	}
+	for _, master := range []bool{false, true} {
+		name := "scoped"
+		creds := aws.Credentials{AccessKeyID: vec.AccessKey, SecretAccessKey: "incorrect-signing-secret", SessionToken: vec.Token}
+		if master {
+			name = "master"
+			creds = aws.Credentials{AccessKeyID: "kid-master", SecretAccessKey: "incorrect-signing-secret"}
+		}
+		for _, tc := range []struct {
+			name string
+			at   time.Time
+		}{
+			{"stale", now.Add(-headerValidity - ExpirySkew - time.Second)},
+			{"future", now.Add(ExpirySkew + time.Second)},
+		} {
+			t.Run(name+"/"+tc.name, func(t *testing.T) {
+				r := kidSign(t, creds, "GET", "/agent-data/run-42/a", "", "UNSIGNED-PAYLOAD", nil, tc.at)
+				got, err := v.Verify(r, now)
+				requireCode(t, err, "SignatureDoesNotMatch")
+				if got != (Claims{}) {
+					t.Fatalf("date-window failure exposed claims=%+v", got)
+				}
+			})
+		}
+	}
+}
+
+// protects=implicit-hash read failures reveal no scoped or master claims before signature comparison;
+// fails_when=the implicit-hash error returns partial claims or the fixture never reaches body reading;
+// no_claim=successful implicit-hash buffering is avoided.
+func TestKidImplicitReadFailureEmpty(t *testing.T) {
+	f := loadFixture(t)
+	v, err := NewWithMaster(f.SigningKey, "kid-master", "kid-master-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Unix(f.Now, 0)
+	vec := f.Vectors[0]
+	sum := sha256.Sum256([]byte("hello"))
+	hash := hex.EncodeToString(sum[:])
+	for _, master := range []bool{false, true} {
+		name := "scoped"
+		creds := aws.Credentials{AccessKeyID: vec.AccessKey, SecretAccessKey: vec.Secret, SessionToken: vec.Token}
+		if master {
+			name = "master"
+			creds = aws.Credentials{AccessKeyID: "kid-master", SecretAccessKey: "kid-master-secret"}
+		}
+		t.Run(name, func(t *testing.T) {
+			r := kidSign(t, creds, "PUT", "/agent-data/run-42/a", "hello", hash, nil, now)
+			r.Header.Del("X-Amz-Content-Sha256")
+			if err := v4.NewSigner().SignHTTP(r.Context(), creds, r, hash, "s3", "us-east-1", now); err != nil {
+				t.Fatal(err)
+			}
+			if r.Header.Get("X-Amz-Content-Sha256") != "" || strings.Contains(r.Header.Get("Authorization"), "x-amz-content-sha256") {
+				t.Fatal("fixture must sign without a declared hash header")
+			}
+			reader := &zzCountingReader{Reader: &failingReader{}}
+			r.Body = io.NopCloser(reader)
+			got, err := v.Verify(r, now)
+			requireCode(t, err, "SignatureDoesNotMatch")
+			if reader.reads == 0 {
+				t.Fatal("fixture did not reach implicit body hashing")
+			}
+			if got != (Claims{}) {
+				t.Fatalf("implicit body-read failure exposed claims=%+v", got)
+			}
+		})
+	}
+}
+
+// protects=a master signature valid over a declared hash does not authenticate a mismatching body;
+// fails_when=payload mismatch returns any master claims or a matching-body control fails;
+// no_claim=the master key is safe to disclose.
+func TestKidMasterDeclaredMismatchEmpty(t *testing.T) {
+	f := loadFixture(t)
+	v, err := NewWithMaster(f.SigningKey, "kid-master", "kid-master-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Unix(f.Now, 0)
+	sum := sha256.Sum256([]byte("hello"))
+	hash := hex.EncodeToString(sum[:])
+	creds := aws.Credentials{AccessKeyID: "kid-master", SecretAccessKey: "kid-master-secret"}
+	for _, body := range []string{"hello", "jello"} {
+		t.Run(body, func(t *testing.T) {
+			r := kidSign(t, creds, "PUT", "/outside/key", "hello", hash, nil, now)
+			r.Body = io.NopCloser(strings.NewReader(body))
+			got, err := v.Verify(r, now)
+			if body == "hello" {
+				if err != nil || got != (Claims{Master: true, Kid: "kid-master"}) {
+					t.Fatalf("valid control: claims=%+v err=%v", got, err)
+				}
+			} else {
+				requireCode(t, err, "SignatureDoesNotMatch")
+				if got != (Claims{}) {
+					t.Fatalf("master payload mismatch exposed claims=%+v", got)
+				}
+			}
+		})
+	}
+}
