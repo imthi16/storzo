@@ -222,7 +222,7 @@ Verified on Docker Compose with `scripts/gateway_e2e.py` (35 checks) unless note
 Where the implementation differs from the text above:
 
 - **Audit contract.** `x-storzo-signature` is HMAC-SHA256 over `<timestamp>.<body>` with `x-storzo-timestamp`, accepted within 300 s, body capped at 4 MiB, field limits enforced. `AUDIT_URL` is a required gateway setting.
-- **Denied requests have an empty `kid`**, because the identity of an unauthenticated request cannot be trusted. Criterion 10 is met for decision and status, not for kid on denials.
+- **Denied requests have an empty `kid`**, including requests that were correctly signed and denied by scope: the verifier returns no claims on any error, so the audit event carries only the kid of allowed requests. (An earlier note blamed unauthenticated callers; that was wrong, and the console now shows "not recorded".) Criterion 10 is met for decision and status, not for kid on denials. Recording the kid of an authenticated but out-of-scope request would need the verifier to return the claims together with the scope error; not done.
 - **Header allowlist.** Scoped requests forward only `x-amz-meta-*`, checksum headers and the verified payload hash; ACL/grant headers are removed for all requests, including the master key's.
 - **Credential rules added:** the prefix must end in `/`; header-signed requests must sign `x-amz-security-token`.
 - **Go version.** The Docker image and `go.mod` use Go 1.26.11 because several standard-library CVEs have no fix in 1.25.

@@ -5,14 +5,15 @@ Status meanings: **Implemented** = source code exists, subject to end-to-end val
 | Component | Feature | Status | Evidence / notes |
 |---|---|---|---|
 | React UI | Admin sign-in / sign-out | Implemented | Cookie session via FastAPI, CSRF on writes |
-| React UI | Overview and bucket stats | Implemented | Capped 3000-object scan |
+| React UI | Overview and bucket stats | Implemented | Capped 3000-object scan. The 14-day upload chart counts console uploads plus successful gateway `PUT` requests (a multipart upload counts once per part, and the number includes applications and scripts, not only agents); the file-type colors pass the project palette checks for adjacent categories, not for every pair, so the legend text carries the identity |
 | React UI | Bucket create/list/delete (empty) | Implemented | Backend S3 calls |
 | React UI | Object and folder browsing | Implemented | Prefix/Delimiter, first-page pagination |
 | React UI | Drag-and-drop image upload | Implemented | 50 MB default backend limit |
 | React UI | Image thumbnail and full preview | Implemented | Original unchanged, on-demand WebP thumbnail |
 | React UI | Download / delete | Implemented | Requires authenticated session; CSRF on delete |
 | React UI | Presigned download link | Implemented | Requires public S3 endpoint / local port-forward |
-| React UI | Activity / Settings / Health | Implemented | Single admin only |
+| React UI | Activity log | Implemented | Console actions and gateway requests; gateway rows show method, allow/deny and status; filter by source and decision (server-side, `GET /api/audit?source=&decision=`); 24-hour timestamps; skip link. Not tested with a screen reader |
+| React UI | Settings / Health | Implemented | Single admin only. The "Before production" list shows open items as unchecked; nothing on that page asserts production readiness |
 | Backend | Audit logging | Implemented | Local SQLite database with persistent volume |
 | Backend | SHA-256 of uploaded object | Implemented | Added to S3 object metadata for UI uploads |
 | Backend | S3 SigV4/S3 SDK support | Delegated | The SDK talks to the Storzo gateway, which verifies and forwards to SeaweedFS; SeaweedFS does the S3 work |

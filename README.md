@@ -35,8 +35,8 @@ Storzo brings bucket browsing, image previews, uploads and an audit trail into o
 | **Bucket & object browser** | Create buckets, navigate nested prefixes, download objects and delete files. |
 | **Image workflow** | Drag and drop uploads, view thumbnails and preview images. On-demand WebP thumbnails leave originals unchanged. |
 | **Shareable downloads** | Generate short-lived presigned links for objects. |
-| **Storage overview** | Inspect bucket usage, file-type mix and recent objects through the console. |
-| **Admin sessions & audit** | Sign in with an HttpOnly signed cookie; management writes use CSRF protection and activity is recorded in SQLite. |
+| **Storage overview** | Inspect bucket usage, file-type mix, recent objects and an upload chart (console uploads plus successful S3 `PUT` requests through the gateway) through the console. |
+| **Admin sessions & audit** | Sign in with an HttpOnly signed cookie; management writes use CSRF protection. The Activity log in the console records console actions and every gateway request in SQLite, with a method, an allow/deny chip and the HTTP status, and can be filtered by source and decision. |
 | **S3 SDK access** | Connect applications directly to the upstream SeaweedFS S3 endpoint. |
 | **Scoped agent credentials** | Issue short-lived keys limited to one bucket prefix, read-only or read-write. A Go gateway in front of SeaweedFS enforces them and audits every request. See [Agent access](#agent-access). |
 | **Self-hosted deployment** | Start with Docker Compose; explore Kubernetes using the starter Helm chart. |
@@ -199,7 +199,7 @@ Limits to know before relying on it:
 
 - No revoke before expiry. The kill switch is rotating `CRED_SIGNING_KEY` and restarting the backend and gateway.
 - Tested with boto3 over plain HTTP. SDK uploads that use `aws-chunked` streaming get 501 (which SDK defaults do this was not tested). AWS CLI, HTTPS and load were not tested.
-- Audit is best effort: a queue of 10,000 events, 4 attempts per batch, no disk spool. Denied requests are logged with an empty `kid`.
+- Audit is best effort: a queue of 10,000 events, 4 attempts per batch, no disk spool. For gateway requests the `kid` is stored only for allowed requests; every denied request, including a correctly signed one denied by scope, is logged with an empty `kid`, so the console shows "not recorded".
 - The audit endpoint accepts a replay inside its 5-minute window.
 - Reviewed by automated tests, mutation checks and cross-review by other AI agents (10 findings fixed; one Kubernetes concern is still open). There has been no human or third-party security review.
 
