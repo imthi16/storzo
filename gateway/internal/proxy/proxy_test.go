@@ -213,7 +213,7 @@ func TestProxyRequests(t *testing.T) {
 }
 
 // protects=verified hashes/bodies forward intact and only hashed bodies have a cap;
-// fails_when=a bad/oversized hash reaches storage, unsigned bodies are capped,
+// fails_when=oversized hashes do not return EntityTooLarge, a bad/oversized hash reaches storage, unsigned bodies are capped,
 // connection headers leak, or storage response headers/body/status are lost;
 // no_claim=bounded unsigned upload size or live multipart interoperability.
 func TestBodiesAndHeaders(t *testing.T) {
@@ -223,7 +223,7 @@ func TestBodiesAndHeaders(t *testing.T) {
 		cap                 int64
 	}{
 		{"hashed", "hash", "hello", 201, 5}, {"implicit-hash", "", "hello", 201, 5},
-		{"oversized", "hash", "hello!", 403, 5}, {"unsigned", "UNSIGNED-PAYLOAD", "hello!", 201, 1},
+		{"oversized", "hash", "hello!", 413, 5}, {"unsigned", "UNSIGNED-PAYLOAD", "hello!", 201, 1},
 		{"tampered", strings.Repeat("0", 64), "hello", 403, 5},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -264,6 +264,9 @@ func TestBodiesAndHeaders(t *testing.T) {
 			h.ServeHTTP(w, r)
 			if w.Code != tc.status {
 				t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+			}
+			if tc.status == http.StatusRequestEntityTooLarge && !strings.Contains(w.Body.String(), "<Code>EntityTooLarge</Code>") {
+				t.Errorf("expected EntityTooLarge XML, body=%s", w.Body.String())
 			}
 			if tc.status == 201 {
 				if calls.Load() != 1 || w.Body.String() != tc.body || w.Header().Get("ETag") != "test-etag" || w.Header().Get("X-Response-Hop") != "" {

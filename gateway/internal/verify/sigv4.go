@@ -5,6 +5,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"io"
 	"net/http"
 	"net/url"
@@ -153,6 +154,12 @@ func (v *Verifier) Verify(r *http.Request, now time.Time) (Claims, error) {
 			body, err = io.ReadAll(r.Body)
 			closeErr := r.Body.Close()
 			r.Body = io.NopCloser(bytes.NewReader(body))
+			var tooLarge *http.MaxBytesError
+			if errors.As(err, &tooLarge) {
+				// This reports only the public body cap before checking the signature;
+				// it reveals no credential validity and is safe for unauthenticated callers.
+				return empty, &Error{http.StatusRequestEntityTooLarge, "EntityTooLarge", "The hashed request body exceeds the maximum allowed size."}
+			}
 			if err != nil || closeErr != nil {
 				return empty, signatureError()
 			}
