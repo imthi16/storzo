@@ -4,16 +4,17 @@ Run from backend: python3 tests/gateway_vectors.py
 The signing key is public synthetic test data; time is fixed, IDs are random.
 """
 import json
-from datetime import datetime, timezone
-from pathlib import Path
 import sys
+from datetime import UTC, datetime
+from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from app import config, credentials
 from botocore.auth import S3SigV4Auth, S3SigV4QueryAuth
 from botocore.awsrequest import AWSRequest
 from botocore.credentials import Credentials
+
+from app import config, credentials
 
 
 def main():
@@ -37,7 +38,7 @@ def main():
             req = AWSRequest(method=method, url='https://s3.example.test' + path, data=b'' if presigned else body.encode())
             auth = Credentials(cred['access_key_id'], cred['secret_access_key'], cred['session_token'])
             signer = S3SigV4QueryAuth(auth, 's3', 'us-east-1', expires=300) if presigned else S3SigV4Auth(auth, 's3', 'us-east-1')
-            with patch('botocore.auth.get_current_datetime', return_value=datetime.fromtimestamp(now, timezone.utc)):
+            with patch('botocore.auth.get_current_datetime', return_value=datetime.fromtimestamp(now, UTC)):
                 signer.add_auth(req)
             requests.append({'method': req.method, 'url': req.url, 'body': body, 'headers': dict(req.headers)})
             count += 1
