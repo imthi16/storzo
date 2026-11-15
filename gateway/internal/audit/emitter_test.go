@@ -11,10 +11,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 const testKey = "0123456789abcdef0123456789abcdef"
@@ -606,4 +608,113 @@ func TestConcurrentEmit(t *testing.T) {
 	if got+int(em.Dropped()) != total {
 		t.Fatalf("sent %d + dropped %d != %d", got, em.Dropped(), total)
 	}
+}
+
+// protects=Emit truncates oversized string fields on a UTF-8 boundary and still sends sibling events; fails_when=a 3000-byte field is queued whole, a multi-byte rune is split, or an oversized event drops the rest of the batch; no_claim=the backend's 422 limits match these caps or that a truncated key is the caller's original key
+func TestTruncateBeforeQueue(t *testing.T) {
+	limits := []struct {
+		name  string
+		limit int
+		set   func(*Event, string)
+		get   func(Event) string
+	}{
+		{"kid", maxKid, func(e *Event, s string) { e.Kid = s }, func(e Event) string { return e.Kid }},
+		{"method", maxMethod, func(e *Event, s string) { e.Method = s }, func(e Event) string { return e.Method }},
+		{"bucket", maxBucket, func(e *Event, s string) { e.Bucket = s }, func(e Event) string { return e.Bucket }},
+		{"key", maxKey, func(e *Event, s string) { e.Key = s }, func(e Event) string { return e.Key }},
+		{"decision", maxDecision, func(e *Event, s string) { e.Decision = s }, func(e Event) string { return e.Decision }},
+	}
+
+	rec := &recorder{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rec.save(r)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+	em := New(Config{
+		URL:           srv.URL,
+		SigningKey:    testKey,
+		FlushInterval: time.Hour,
+		Client:        testClient(srv),
+	})
+
+	for _, field := range limits {
+		ev := Event{Kid: "k", Method: "GET", Bucket: "b", Key: "obj", Status: 200, Bytes: 1, Decision: "allow"}
+		ev = withField(field.set, ev, strings.Repeat("a", 3000))
+		em.Emit(ev)
+		// A 3-byte rune straddles the cap: limit-1 ASCII bytes, then '€'.
+		ev = Event{Kid: "k", Method: "GET", Bucket: "b", Key: "obj", Status: 200, Bytes: 1, Decision: "allow"}
+		ev = withField(field.set, ev, strings.Repeat("a", field.limit-1)+"€")
+		em.Emit(ev)
+	}
+	em.Emit(Event{Kid: "low", Method: "GET", Bucket: "b", Key: "s", Status: 99, Bytes: -5, Decision: "allow"})
+	em.Emit(Event{Kid: "high", Method: "GET", Bucket: "b", Key: "s", Status: 600, Bytes: 0, Decision: "allow"})
+	em.Emit(Event{Kid: "ok", Method: "GET", Bucket: "b", Key: "s", Status: 100, Bytes: 4, Decision: "allow"})
+	em.Emit(Event{Kid: "top", Method: "GET", Bucket: "b", Key: "s", Status: 599, Bytes: 8, Decision: "allow"})
+
+	short := Event{Kid: "one", Method: "GET", Bucket: "pics", Key: "a.txt", Status: 200, Bytes: 3, Decision: "allow"}
+	huge := Event{Kid: strings.Repeat("k", 3000), Method: strings.Repeat("m", 3000), Bucket: strings.Repeat("b", 3000), Key: strings.Repeat("x", 3000), Status: 201, Bytes: 9, Decision: strings.Repeat("d", 3000)}
+	tail := Event{Kid: "three", Method: "HEAD", Bucket: "pics", Key: "c.txt", Status: 204, Bytes: 1, Decision: "deny:scope"}
+	em.Emit(short)
+	em.Emit(huge)
+	em.Emit(tail)
+
+	finish(t, em)
+	rec.check(t)
+
+	var got []Event
+	for _, s := range rec.list() {
+		got = append(got, verifySnap(t, testKey, s)...)
+	}
+	wantN := len(limits)*2 + 4 + 3
+	if len(got) != wantN {
+		t.Fatalf("delivered %d, want %d", len(got), wantN)
+	}
+
+	i := 0
+	for _, field := range limits {
+		long := field.get(got[i])
+		i++
+		if len(long) != field.limit || long != strings.Repeat("a", field.limit) {
+			t.Fatalf("%s 3000-char len=%d value=%q", field.name, len(long), long)
+		}
+		cut := field.get(got[i])
+		i++
+		if cut != strings.Repeat("a", field.limit-1) || !utf8.ValidString(cut) {
+			t.Fatalf("%s rune cut = %q (%d bytes)", field.name, cut, len(cut))
+		}
+	}
+
+	if got[i].Status != 599 || got[i].Bytes != 0 || got[i].Kid != "low" {
+		t.Fatalf("below range = %+v", got[i])
+	}
+	i++
+	if got[i].Status != 599 || got[i].Bytes != 0 || got[i].Kid != "high" {
+		t.Fatalf("above range = %+v", got[i])
+	}
+	i++
+	if got[i].Status != 100 || got[i].Bytes != 4 {
+		t.Fatalf("lower edge = %+v", got[i])
+	}
+	i++
+	if got[i].Status != 599 || got[i].Bytes != 8 {
+		t.Fatalf("upper edge = %+v", got[i])
+	}
+	i++
+
+	if got[i] != short {
+		t.Fatalf("sibling before = %+v", got[i])
+	}
+	mid := got[i+1]
+	if mid.Kid != strings.Repeat("k", maxKid) || mid.Method != strings.Repeat("m", maxMethod) || mid.Bucket != strings.Repeat("b", maxBucket) || mid.Key != strings.Repeat("x", maxKey) || mid.Decision != strings.Repeat("d", maxDecision) {
+		t.Fatalf("oversized event = %+v", mid)
+	}
+	if got[i+2] != tail {
+		t.Fatalf("sibling after = %+v", got[i+2])
+	}
+}
+
+func withField(set func(*Event, string), ev Event, value string) Event {
+	set(&ev, value)
+	return ev
 }

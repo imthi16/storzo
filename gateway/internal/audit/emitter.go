@@ -16,6 +16,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 )
 
 const (
@@ -27,6 +28,13 @@ const (
 	headerTimestamp = "x-storzo-timestamp"
 	headerSignature = "x-storzo-signature"
 	contentTypeJSON = "application/json"
+
+	// Field caps match the audit receiver. A longer value makes it reject the whole batch.
+	maxKid      = 64
+	maxMethod   = 16
+	maxBucket   = 63
+	maxKey      = 1024
+	maxDecision = 16
 )
 
 // Event is one gateway request. JSON names match the audit ingest contract.
@@ -131,6 +139,8 @@ func (e *Emitter) Emit(ev Event) {
 	if e == nil {
 		return
 	}
+	// Truncate before the queue so one oversized field cannot 422 the whole batch.
+	ev = sanitize(ev)
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.closed {
@@ -302,6 +312,33 @@ func (e *Emitter) post(body []byte) error {
 		return nil
 	}
 	return statusError(resp.StatusCode)
+}
+
+func sanitize(ev Event) Event {
+	ev.Kid = truncateUTF8(ev.Kid, maxKid)
+	ev.Method = truncateUTF8(ev.Method, maxMethod)
+	ev.Bucket = truncateUTF8(ev.Bucket, maxBucket)
+	ev.Key = truncateUTF8(ev.Key, maxKey)
+	ev.Decision = truncateUTF8(ev.Decision, maxDecision)
+	if ev.Status < 100 || ev.Status > 599 {
+		ev.Status = 599
+	}
+	if ev.Bytes < 0 {
+		ev.Bytes = 0
+	}
+	return ev
+}
+
+// truncateUTF8 cuts s to at most maxBytes without splitting a rune.
+func truncateUTF8(s string, maxBytes int) string {
+	if len(s) <= maxBytes {
+		return s
+	}
+	cut := maxBytes
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut]
 }
 
 func signature(key []byte, ts string, body []byte) string {
