@@ -107,7 +107,7 @@ func signedRequest(t *testing.T, v *Verifier, token, kid, method, path, body, pa
 
 // protects=hashed/unsigned payload validation, preserved bodies and signed-header selection;
 // fails_when=changed payloads pass or valid SDK signatures fail;
-// no_claim=streaming chunk verification, intentionally unsupported.
+// no_claim=signed chunk verification with aws-chunked framing.
 func TestSDKPayloads(t *testing.T) {
 	f := loadFixture(t)
 	v, _ := New(f.SigningKey)
@@ -133,6 +133,9 @@ func TestSDKPayloads(t *testing.T) {
 	}
 	for _, payload := range []string{"STREAMING-AWS4-HMAC-SHA256-PAYLOAD", "STREAMING-UNSIGNED-PAYLOAD-TRAILER", "STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER"} {
 		r := signedRequest(t, v, vec.Token, vec.AccessKey, "PUT", "/agent-data/run-42/a", "hello", payload, now, false)
+		if payload != signedChunked {
+			r.Header.Set("Content-Encoding", "aws-chunked")
+		}
 		_, err := v.Verify(r, now)
 		requireCode(t, err, "NotImplemented")
 	}

@@ -85,3 +85,31 @@ def test_unconfigured_key_returns_503(monkeypatch, tmp_path):
     monkeypatch.setattr(config, 'CRED_SIGNING_KEY', '')
     c, _fake = setup_client(monkeypatch, tmp_path)
     assert issue(c, login(c)).status_code == 503
+
+
+def test_revoke_requires_login_and_csrf(client):
+    """protects=admin-only revoke; fails_when=missing login or CSRF is accepted; no_claim=gateway behavior."""
+    c, csrf = client
+    kid = issue(c, csrf).json()['access_key_id']
+    url = f'/api/credentials/{kid}/revoke'
+    assert c.post(url).status_code == 403
+    c.cookies.clear()
+    assert c.post(url, headers={'X-CSRF-Token': csrf}).status_code == 401
+
+
+def test_revoke_uses_issued_kid_and_audits(client):
+    """protects=known scoped kids and audit; fails_when=a label or master key matches; no_claim=polling."""
+    c, csrf = client
+    unknown = 'STZ' + 'A' * 16
+    cred = issue(c, csrf, label=f'kid={unknown} mode=rw exp=9999999999').json()
+    headers = {'X-CSRF-Token': csrf}
+    for kid in (unknown, 'malformed', config.S3_ACCESS_KEY):
+        assert c.post(f'/api/credentials/{kid}/revoke', headers=headers).status_code == 404
+    kid = cred['access_key_id']
+    url = f'/api/credentials/{kid}/revoke'
+    assert c.post(url, headers=headers).json() == {'kid': kid, 'revoked': True}
+    assert c.post(url, headers=headers).status_code == 200
+    rows = [row for row in c.get('/api/audit').json()['items'] if row['action'] == 'credential.revoke']
+    assert len(rows) == 2
+    assert all((row['bucket'], row['object_key'], row['detail']) == ('demo-images', 'run-42/', f'kid={kid}')
+               for row in rows)
