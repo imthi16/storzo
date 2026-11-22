@@ -105,7 +105,7 @@ func readAuth(r *http.Request) (authentication, error) {
 // and sets X-Amz-Content-Sha256 to the verified payload hash or UNSIGNED-PAYLOAD;
 // on denial it returns an S3 *Error.
 // A non-empty Claims alongside a non-nil error means authenticated but denied.
-// A hashed payload is read and restored in memory. UNSIGNED-PAYLOAD is not read.
+// Hashed and signed chunked payloads are read and restored in memory. UNSIGNED-PAYLOAD is not read.
 // The caller must preserve the unmodified path-style URL and impose its own
 // transport/body limits when this core is wired to a server.
 func (v *Verifier) Verify(r *http.Request, now time.Time) (Claims, error) {
@@ -147,13 +147,16 @@ func (v *Verifier) Verify(r *http.Request, now time.Time) (Claims, error) {
 		}
 		payload = q.Get("X-Amz-Content-Sha256")
 	}
-	if strings.HasPrefix(payload, "STREAMING-") || strings.Contains(strings.ToLower(r.Header.Get("Content-Encoding")), "aws-chunked") {
+	chunked, otherEncoding := chunkEncodings(r)
+	streaming := payload == signedChunked && chunked == 1 && !master && !a.presigned && r.Method == http.MethodPut &&
+		len(r.Header.Values("X-Amz-Trailer")) == 0 && len(r.Trailer) == 0
+	if !streaming && (strings.HasPrefix(payload, "STREAMING-") || strings.Contains(strings.ToLower(strings.Join(r.Header.Values("Content-Encoding"), ",")), "aws-chunked")) {
 		return empty, unsupported()
 	}
 	if payload == "" && a.presigned {
 		payload = "UNSIGNED-PAYLOAD"
 	}
-	declaredHash := payload != "" && payload != "UNSIGNED-PAYLOAD"
+	declaredHash := payload != "" && payload != "UNSIGNED-PAYLOAD" && !streaming
 	if payload == "" {
 		payload, err = readPayloadHash(r, payload)
 		if err != nil {
@@ -249,6 +252,12 @@ func (v *Verifier) Verify(r *http.Request, now time.Time) (Claims, error) {
 		}
 	} else if err := Scope(r, c); err != nil {
 		return c, err
+	}
+	if streaming {
+		payload, err = decodeChunks(r, creds, scope[2], a.signature, otherEncoding, a.date)
+		if err != nil {
+			return empty, err
+		}
 	}
 	// Publish the verified hash for the forwarding signer, including implicit hashes.
 	r.Header.Set("X-Amz-Content-Sha256", payload)
