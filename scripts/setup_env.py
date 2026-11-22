@@ -27,7 +27,7 @@ data = {
     'S3_BIND_IP': '127.0.0.1',
     'COOKIE_SECURE': 'false',
     'MAX_UPLOAD_MB': '50',
-    'SEAWEEDFS_TAG': 'latest',
+    'SEAWEEDFS_TAG': '4.53_full',  # same pin as compose.yaml and .env.example; 'latest' silently unpinned the image
 }
 p.write_text(''.join(f'{k}={v}\n' for k,v in data.items()))
 p.chmod(0o600)
