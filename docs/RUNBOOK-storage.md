@@ -65,8 +65,10 @@ Categories: `match`, `mismatch`, `no-metadata`, `unreadable`. Only LIST/HEAD/GET
 
 - **Bounded:** `--max-objects N` stops after N objects; resume with the same `--state`.
 - **Resumable:** the state file keeps a per-bucket `StartAfter` cursor and cumulative counts.
-  Limitation: objects inserted *before* the cursor after a run are not re-checked until you start
-  a fresh state file. A resumed run is not a full re-verification.
+  When a run reaches the **end** of a bucket's listing, that bucket's cursor is cleared, so the
+  next run with the same `--state` starts a fresh full pass (safe for scheduled full scrubs).
+  Limitation: keys inserted *before* the cursor during a resumed (bounded) scan are skipped
+  until the next full pass. A resumed run is not a full re-verification.
 - **Metadata key case:** SeaweedFS returns metadata keys as stored. Uploads through the gateway
   arrive with canonicalized headers (`Sha256`); direct-to-storage uploads keep `sha256`. The scrub
   matches the key case-insensitively (bug found and fixed via live testing; regression test added).
@@ -74,8 +76,8 @@ Categories: `match`, `mismatch`, `no-metadata`, `unreadable`. Only LIST/HEAD/GET
 
 **Proves:** for every object with stored sha256 metadata, the bytes read back through the endpoint
 match that hash at scrub time. Verified live: a planted wrong-hash object produced `mismatch` and
-exit 1; a correct object produced `match`; 27 no-Docker unit tests cover the comparison, pagination,
-state and failure paths (`python3 -m pytest scripts/tests -q`).
+exit 1; a correct object produced `match`; 52 no-Docker unit tests cover the comparison, pagination,
+state, cursor-reset, drill-verification and shell guard paths (`python3 -m pytest scripts/tests -q`).
 **Does not prove:** anything about objects **without** stored sha256 — they are counted, not
 downloaded, and a scrub over them proves nothing. Console uploads store sha256; SDK/gateway uploads
 only if the client sets the metadata. It also does not prove crash safety, absence of bit rot in
@@ -88,14 +90,20 @@ gap reporting damaged needle headers, seaweedfs issue 11460 — cited from HANDO
 scripts/storage_restore_drill.sh [source-compose-project]   # defaults to "storzo"
 ```
 
-Requires a running source stack, docker, host python3 + boto3, and the repo `.env`. Steps:
+Requires a running source stack, docker, host python3 + boto3, and the repo `.env`. The source
+project must not be in the reserved `hardening-drill*` namespace. Steps:
 seed a scratch bucket (4 objects with sha256 metadata, 1 without) → meta backup (§1) → cold volume
-tar (source storage **stopped** during the tar, restarted after) → throwaway storage-only stack
-`-p hardening-drill` on `127.0.0.1:28333` with fresh credentials → `fs.meta.load` into the empty
-drill filer and assert the scratch bucket is listed (metadata-only restore proof) → wipe the
-**drill's own** volume, extract the full tar, restart → run the scrub plus one independent
-byte-hash check → cleanup (scratch bucket, drill project `down -v`, temp dir). Only the drill
-project's volumes are ever deleted; the source volume is mounted read-only for the tar.
+tar (source storage **stopped** during the tar, restarted after; recovery is armed *before* the
+stop request, so a partially failed stop still restarts source) → throwaway storage-only stack
+under a **unique per-run project** `hardening-drill-<UTC timestamp>-<pid>` on `127.0.0.1:28333`
+with fresh credentials (refuses to run if that project or volume name already exists) →
+`fs.meta.load` into the empty drill filer and assert the scratch bucket is listed (metadata-only
+restore proof) → wipe the **drill's own** volume (only after asserting it differs from the source
+volume and carries the drill project prefix), extract the full tar, restart → run the scrub plus
+an independent size + SHA-256 check of **every** seeded object, including the no-metadata fixture
+(any missing or different key fails the drill) → cleanup (scratch bucket, drill project `down -v`,
+temp dir). Only the drill project's volumes are ever deleted; the source volume is mounted
+read-only for the tar.
 
 **Measured (this host, 5 objects / ~4.1 MiB, two clean runs, 2026-11-22):**
 
@@ -109,6 +117,9 @@ project's volumes are ever deleted; the source volume is mounted read-only for t
 Both runs: `DRILL PASS`, scrub `match=4, mismatch=0, no-metadata=1, unreadable=0`.
 Failure detection was also demonstrated end-to-end: a deliberately corrupted object left in the
 source data was restored by the drill and flagged `mismatch` (non-zero exit) before it was removed.
+Re-verified after the isolation/verification hardening (unique drill project, all-object check):
+a third run on 2026-11-22 passed with identical timings, and `storage_restore_drill.sh
+hardening-drill` was refused live (exit 1) before touching any data.
 
 **RPO (honest):** with this scheme, RPO is "time since the last backup". There is no continuous
 replication configured; everything written after the last backup is lost in a restore. The cold
@@ -142,6 +153,11 @@ cron (daily 02:30 meta backup + weekly scrub Sunday 03:00, off-host target mount
 30 2 * * *  cd /opt/storzo && scripts/storage_backup_meta.sh /mnt/backups storzo >> /var/log/storzo-backup.log 2>&1
 0 3 * * 0   cd /opt/storzo && python3 scripts/storage_scrub.py --state /var/lib/storzo/scrub.json >> /var/log/storzo-scrub.log 2>&1
 ```
+
+The weekly full scrub may reuse `--state`: a run that reaches the end of the listing clears its
+cursor, so each week starts from the beginning (a completed checkpoint no longer causes later
+runs to skip everything). `--state` is only *needed* to resume bounded `--max-objects` runs; keys
+inserted before the cursor during such a resumed scan are skipped until the next full pass.
 
 systemd timer (`/etc/systemd/system/storzo-backup.service` + `.timer`, illustrative):
 

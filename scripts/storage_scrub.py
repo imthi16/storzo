@@ -7,8 +7,9 @@ Reports match / mismatch / no-metadata / unreadable. Never writes to S3.
 
 Bounded: --max-objects caps one run. Resumable: --state keeps a per-bucket
 cursor (StartAfter) plus cumulative counts; a resumed run skips keys already
-processed. Objects inserted *before* the cursor after a run are not re-checked
-until you start a fresh state file.
+processed. When a run reaches the end of a bucket's listing its cursor is
+cleared, so the next run starts a fresh full pass. Keys inserted *before* the
+cursor during a resumed (bounded) scan are skipped until the next full pass.
 
 Exit codes: 0 clean (no-metadata objects are reported but are not failures),
 1 any mismatch, 2 any unreadable (no mismatch), 3 configuration/usage error.
@@ -106,6 +107,21 @@ def check_one(client, bucket, key):
     return classify(stored, actual), actual
 
 
+def verify_expected(client, expected):
+    """Restore-drill check: EVERY seeded key must come back with the recorded
+    size and byte hash (including the no-metadata fixture). Read-only.
+    Raises AssertionError on any missing or different object."""
+    for key, rec in expected['objects'].items():
+        try:
+            data = client.get_object(Bucket=expected['bucket'], Key=key)['Body'].read()
+        except Exception as exc:
+            raise AssertionError(
+                f'restored object missing or unreadable: {key} ({type(exc).__name__})') from exc
+        assert len(data) == rec['size'], f'size mismatch for {key}: {len(data)} != {rec["size"]}'
+        assert hashlib.sha256(data).hexdigest() == rec['bytes_sha256'], \
+            f'byte-hash mismatch for {key}'
+
+
 class State:
     """JSON checkpoint: per-bucket last-processed key + cumulative counts."""
 
@@ -149,6 +165,9 @@ def run_scrub(client, buckets, state, max_objects=0):
                 break
         if bounded:
             break
+        # Listing finished: drop the cursor so the next run starts a fresh
+        # full pass instead of StartAfter-skipping every key (weekly cron).
+        state.done.pop(bucket, None)
     state.save()
     return {'processed': processed, 'bounded': bounded,
             'counts': dict(state.counts), 'problems': problems}

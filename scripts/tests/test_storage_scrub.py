@@ -195,7 +195,32 @@ class TestRunScrub:
         third = scrub.run_scrub(s3, ['b'], scrub.State(path))
         assert third['processed'] == 1 and not third['bounded']
         assert third['counts']['match'] == 5
-        assert scrub.State(path).done['b'] == 'k4'
+        # Completed listing: cursor cleared so the next run is a full pass.
+        assert 'b' not in scrub.State(path).done
+
+    def test_bounded_run_keeps_cursor_only_for_unfinished_bucket(self, tmp_path):
+        s3 = FakeS3({'b1': {'k': obj(b'a', digest(b'a'))},
+                     'b2': {f'k{i}': obj(b'a', digest(b'a')) for i in range(3)}})
+        path = tmp_path / 'state.json'
+        first = scrub.run_scrub(s3, ['b1', 'b2'], scrub.State(path), max_objects=2)
+        assert first['bounded']
+        mid = scrub.State(path)
+        assert 'b1' not in mid.done and mid.done['b2'] == 'k0'
+        second = scrub.run_scrub(s3, ['b1', 'b2'], scrub.State(path))
+        # b1 re-scanned from the start, b2 resumed after k0.
+        assert second['processed'] == 3 and not second['bounded']
+        assert second['counts']['match'] == 5
+
+    def test_complete_scan_resets_cursor_for_next_run(self, tmp_path):
+        # A finished listing must not leave a StartAfter cursor behind, or the
+        # next scheduled full scrub skips everything and "passes" on 0 objects.
+        s3 = FakeS3({'b': {f'k{i}': obj(b'a', digest(b'a')) for i in range(5)}})
+        path = tmp_path / 'state.json'
+        first = scrub.run_scrub(s3, ['b'], scrub.State(path))
+        assert first['processed'] == 5 and not first['bounded']
+        second = scrub.run_scrub(s3, ['b'], scrub.State(path))
+        assert second['processed'] == 5
+        assert second['counts']['match'] == 10
 
     def test_multiple_buckets(self):
         s3 = FakeS3({'b1': {'k': obj(b'a', digest(b'a'))},
@@ -203,6 +228,58 @@ class TestRunScrub:
         result = scrub.run_scrub(s3, ['b1', 'b2'], scrub.State(None))
         assert result['counts']['match'] == 1
         assert result['counts']['mismatch'] == 1
+
+
+class TestVerifyExpected:
+    """Drill's independent check must cover EVERY seeded object, not just one."""
+
+    @staticmethod
+    def expected():
+        data = b'x' * 1024
+        small = b'y' * 64
+        return data, small, {'bucket': 'b', 'objects': {
+            **{f'drill/obj-{i}.bin': {'sha256': digest(data), 'size': len(data),
+                                      'bytes_sha256': digest(data)} for i in range(4)},
+            'drill/no-meta.bin': {'sha256': None, 'size': len(small),
+                                  'bytes_sha256': digest(small)}}}
+
+    @staticmethod
+    def full_s3(data, small):
+        return FakeS3({'b': {
+            **{f'drill/obj-{i}.bin': obj(data, digest(data)) for i in range(4)},
+            'drill/no-meta.bin': obj(small)}})
+
+    def test_all_objects_present_passes(self):
+        data, small, exp = self.expected()
+        scrub.verify_expected(self.full_s3(data, small), exp)  # must not raise
+
+    def test_missing_key_fails(self):
+        data, small, exp = self.expected()
+        s3 = self.full_s3(data, small)
+        del s3.objects['b']['drill/obj-2.bin']
+        with pytest.raises(AssertionError, match='drill/obj-2.bin'):
+            scrub.verify_expected(s3, exp)
+
+    def test_missing_no_meta_fixture_fails(self):
+        data, small, exp = self.expected()
+        s3 = self.full_s3(data, small)
+        del s3.objects['b']['drill/no-meta.bin']
+        with pytest.raises(AssertionError, match='drill/no-meta.bin'):
+            scrub.verify_expected(s3, exp)
+
+    def test_corrupted_bytes_fail(self):
+        data, small, exp = self.expected()
+        s3 = self.full_s3(data, small)
+        s3.objects['b']['drill/obj-1.bin'] = obj(b'z' * 1024, digest(data))
+        with pytest.raises(AssertionError, match='byte-hash mismatch'):
+            scrub.verify_expected(s3, exp)
+
+    def test_wrong_size_fails(self):
+        data, small, exp = self.expected()
+        s3 = self.full_s3(data, small)
+        s3.objects['b']['drill/no-meta.bin'] = obj(b'y' * 63)
+        with pytest.raises(AssertionError, match='size mismatch'):
+            scrub.verify_expected(s3, exp)
 
 
 class TestLoadEnv:
