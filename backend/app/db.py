@@ -22,6 +22,10 @@ def init_db():
             bucket TEXT, object_key TEXT, detail TEXT
         )''')
 
+        db.execute('''CREATE TABLE IF NOT EXISTS revoked_kids (
+            kid TEXT PRIMARY KEY, revoked_at INTEGER NOT NULL, expires_at INTEGER NOT NULL
+        )''')
+
 
 def audit(action: str, bucket: str | None = None, key: str | None = None, detail: str | None = None):
     with connect() as db:

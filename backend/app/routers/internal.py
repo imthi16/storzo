@@ -11,11 +11,11 @@ import json
 import re
 import time
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field, ValidationError
 from starlette.concurrency import run_in_threadpool
 
-from app import config
+from app import config, credentials
 from app.db import audit
 
 router = APIRouter(prefix='/api/internal', tags=['internal'])
@@ -58,8 +58,7 @@ def _fresh_timestamp(header: str | None, now: int) -> str | None:
     return header
 
 
-@router.post('/audit')
-async def ingest_audit(request: Request):
+async def _authenticated_body(request: Request) -> bytearray:
     if len(config.CRED_SIGNING_KEY) < 32:
         raise HTTPException(503, 'Agent credentials are not configured (set CRED_SIGNING_KEY, 32+ characters)')
     timestamp = _fresh_timestamp(request.headers.get('x-storzo-timestamp'), int(time.time()))
@@ -86,6 +85,12 @@ async def ingest_audit(request: Request):
     expected = hmac.new(config.CRED_SIGNING_KEY.encode(), timestamp.encode() + b'.' + raw, hashlib.sha256).hexdigest()
     if not hmac.compare_digest(supplied, expected):
         raise HTTPException(401, 'bad signature')
+    return raw
+
+
+@router.post('/audit')
+async def ingest_audit(request: Request):
+    raw = await _authenticated_body(request)
     try:
         payload = json.loads(raw)
         batch = AuditBatch.model_validate(payload)
@@ -93,3 +98,13 @@ async def ingest_audit(request: Request):
         raise HTTPException(422, 'invalid audit batch') from None
     await run_in_threadpool(_write_events, batch.events)
     return {'accepted': len(batch.events)}
+
+
+@router.get('/revoked')
+async def list_revoked(request: Request, response: Response, since: int = Query(ge=0, le=2**63 - 1)):
+    if await _authenticated_body(request):
+        raise HTTPException(400, 'Expected an empty body')
+    now = int(time.time())
+    kids = await run_in_threadpool(credentials.revoked_since, since, now)
+    response.headers['Cache-Control'] = 'no-store'
+    return {'kids': kids, 'now': now}

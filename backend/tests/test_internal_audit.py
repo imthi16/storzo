@@ -3,6 +3,7 @@ import hashlib
 import hmac
 import json
 import time
+from contextlib import closing
 
 import pytest
 from fastapi import HTTPException, Request
@@ -299,3 +300,23 @@ def test_maximum_field_batch_is_accepted(client):
     rows = _gateway_rows()
     assert len(rows) == 500
     assert all(row['bucket'] == event['bucket'] and row['object_key'] == event['key'] for row in rows)
+
+
+def test_revocation_feed_filters_since_and_expiry(client):
+    """protects=authenticated active feed; fails_when=bad or stale HMAC passes or filtering is wrong; no_claim=nginx."""
+    now = int(time.time())
+    kids = ['STZ' + letter * 16 for letter in 'ABC']
+    with closing(db.connect()) as conn, conn:
+        conn.executemany('INSERT INTO revoked_kids VALUES (?, ?, ?)', [
+            (kids[0], now - 2, now + 5),
+            (kids[1], now - 3, now + 5),
+            (kids[2], now - 2, now - 121),
+        ])
+    url = f'/api/internal/revoked?since={now - 2}'
+    response = client.get(url, headers=_sign(b'', timestamp=now))
+    assert response.status_code == 200
+    assert response.json()['kids'] == kids[:1]
+    assert response.json()['now'] >= now
+    assert response.headers['Cache-Control'] == 'no-store'
+    assert client.get(url, headers=_sign(b'wrong', timestamp=now)).status_code == 401
+    assert client.get(url, headers=_sign(b'', timestamp=now - 301)).status_code == 401

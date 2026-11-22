@@ -8,7 +8,7 @@ This module is the Storzo S3 gateway for scoped agent credentials.
 - `internal/audit`: batched, HMAC-signed delivery of audit events to the backend.
 - `cmd/storzo-mcp`: a stdio MCP server, a thin S3 client (scope is enforced by the gateway, not there).
 
-Required environment for the gateway: `STORAGE_ENDPOINT`, `STORAGE_ACCESS_KEY`, `STORAGE_SECRET_KEY`, `CRED_SIGNING_KEY` (32+ characters) and `AUDIT_URL`; optional `GATEWAY_LISTEN` (default `:8333`) and `GATEWAY_MAX_HASHED_BODY_MB` (default 64). It fails at startup if any required value is missing. It runs as a Compose service and a Helm Deployment; see the repository README ("Agent access").
+Required environment for the gateway: `STORAGE_ENDPOINT`, `STORAGE_ACCESS_KEY`, `STORAGE_SECRET_KEY`, `CRED_SIGNING_KEY` (32+ characters) and `AUDIT_URL`; optional `GATEWAY_LISTEN` (default `:8333`) and `GATEWAY_MAX_HASHED_BODY_MB` (default 64). Set `GATEWAY_REVOCATION_POLL_INTERVAL` to a positive Go duration to override the 10 s polling interval. The gateway fetches a revocation snapshot at startup from the `revoked` sibling of `AUDIT_URL`, and retains its last successful snapshot when polling fails. Scoped keys in the snapshot get 403 `AccessDenied`. It fails at startup if any required value is missing. It runs as a Compose service and a Helm Deployment; see the repository README ("Agent access").
 
 The rest of this file describes the verification library (`internal/verify`).
 
@@ -57,11 +57,12 @@ signatures have a 15-minute validity window; presigns use their signed
 The clock skew is 60 seconds. Expired credentials return `ExpiredToken` even
 when a request signature is also stale.
 
-`UNSIGNED-PAYLOAD` and complete SHA-256 payload hashes are supported. Hashed
-bodies are read, checked, and restored in memory; a future HTTP server must
-supply body size limits. Unsigned payloads intentionally provide no body
-integrity guarantee. `STREAMING-*` payloads and `aws-chunked` content encoding
-return 501, as does CopyObject. A future server must preserve escaped paths
-and must not use a path-cleaning router before this verifier.
+`UNSIGNED-PAYLOAD` and complete SHA-256 payload hashes are supported. Scoped header-signed PUTs also support trailer-free `STREAMING-AWS4-HMAC-SHA256-PAYLOAD`
+with `aws-chunked` content encoding. Hashed and signed chunked bodies are
+verified in memory within the proxy's configured cap. The proxy re-signs
+decoded uploads with the master key and the decoded payload hash and length.
+Unsigned payloads intentionally provide no body integrity guarantee. Other
+streaming variants and CopyObject return 501. The verifier requires the original
+escaped path.
 
 Tests cover the scope matrix, Python-issued credentials, botocore header and presigned signatures for GET/list/PUT, Go SDK signer requests, tampering (including MAC flips and claim rewrites under the original MAC), payload hashing, expiry boundaries and XML errors. The proxy and audit packages have their own tests against fake upstreams. The whole chain was also run against a live SeaweedFS with boto3 over plain HTTP and by `scripts/gateway_e2e.py` on Docker Compose; AWS CLI, HTTPS and load were not tested.
