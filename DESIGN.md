@@ -91,7 +91,7 @@ components:
 
 # Design System: Storzo Console
 
-This file describes what the shipped console (`frontend/src/style.css` and the page-scoped `activity.css`, `overview.css`, `a11y.css`) actually uses. It replaces an earlier draft that specified a yellow accent and a blue-black ground; the product ships a **green** accent, so green is now the source of truth. When the CSS and this file disagree, fix the file or the CSS in the same change.
+This file describes what the shipped console (`frontend/src/style.css` and the page-scoped `activity.css`, `overview.css`, `credentials.css`, `a11y.css`) actually uses. It replaces an earlier draft that specified a yellow accent and a blue-black ground; the product ships a **green** accent, so green is now the source of truth. When the CSS and this file disagree, fix the file or the CSS in the same change.
 
 ## Overview
 
@@ -124,7 +124,7 @@ The product does not claim production readiness (see `PRODUCT.md`), and the UI f
 
 A fixed sidebar (navigation, storage-connected LED, signed-in user) and a content column with a breadcrumb bar. Pages are stacks of panels in a 12-column feel: the Overview puts four telemetry cells in one ruled strip, then paired panels; Buckets is a two-pane list and object table; Activity is one ruled list with a source filter. Responsive behavior is structural: below 820px the sidebar becomes a drawer behind a menu button and grids collapse to one column; below 520px rows stack their metadata under the title (the Activity timestamp moves below the event). No horizontal page scroll at 320px.
 
-Navigation: Overview, Buckets & objects, Activity log, Settings. The app routes by `location.hash`, so a plain `#anchor` link changes the page; the "Skip to content" link focuses `<main>` in script instead.
+Navigation: Overview, Buckets & objects, Activity log, Credentials, Settings. The app routes by `location.hash`, so a plain `#anchor` link changes the page; the "Skip to content" link focuses `<main>` in script instead.
 
 ## Elevation & Depth
 
@@ -146,6 +146,7 @@ Small, hard radii: 2px for marks, 3px for buttons, chips and inputs, 4px for pan
 - **Status LED:** 8px dot, green online, red offline, amber while unknown; always next to a word.
 - **Settings "Before production":** open items shown as empty circles in a neutral tone with the note that they are open, not completed. Never a green check for something that is not done.
 - **Focus:** visible `:focus-visible` ring in `label`; hit areas at least 24px (32px up to 520px wide).
+- **Credentials (`credentials.css`):** one issue panel (bucket, prefix that must end in `/` with the error in text, ro/rw radios, TTL radios). A preset past the server maximum (1 hour) stays visible, disabled, and says why. The one-time secret sits in a well with a `warn` border and the words "shown once"; copy buttons do not write the secret to localStorage, the URL, or logs. Env and MCP blocks are mono. Issued rows show the words Active, Expired, or Revoked next to the color. Revoke uses the danger button and the shared confirm dialog. Below 820px the form is one column; below 520px secret rows and the issued list wrap.
 
 ## Do's and Don'ts
 

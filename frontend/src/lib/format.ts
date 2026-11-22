@@ -109,5 +109,69 @@ export const activityFiltersFromHash = (hash: string): {source: AuditSource; dec
     decision: decision === 'allow' || decision === 'deny' ? decision : 'all',
   };
 };
+// Server ceiling is credentials.MAX_TTL (3600). 24 h stays in the list so the limit is visible.
+export const CREDENTIAL_TTL_MAX = 3600;
+export const CREDENTIAL_TTL_PRESETS = [
+  {seconds: 900, label: '15 min'},
+  {seconds: 3600, label: '1 h'},
+  {seconds: 86400, label: '24 h'},
+] as const;
+export const ttlPresetEnabled = (seconds: number, max = CREDENTIAL_TTL_MAX) => seconds >= 1 && seconds <= max;
+
+export const prefixError = (prefix: string) => {
+  if (!prefix) return 'Enter a prefix that ends with /.';
+  if (prefix.startsWith('/') || prefix.includes('\\') || prefix.includes('\0') || prefix.split('/').includes('..')) return "That prefix can't be used. Remove '..', a leading '/' or backslashes.";
+  if (new TextEncoder().encode(prefix).length > 1024) return 'That prefix is too long.';
+  if (!prefix.endsWith('/')) return 'Prefix must end with /.';
+  return '';
+};
+
+export type IssuedDetail = {kid: string; mode: 'ro' | 'rw'; exp: number; label: string};
+
+// credential.issue detail: "kid=... mode=ro|rw exp=<unix>" plus optional "label=..." (label may contain spaces).
+export const parseIssueDetail = (detail: string | null | undefined): IssuedDetail | null => {
+  if (!detail || typeof detail !== 'string') return null;
+  const kid = detail.match(/(?:^|\s)kid=(\S+)/)?.[1];
+  const mode = detail.match(/(?:^|\s)mode=(ro|rw)(?:\s|$)/)?.[1];
+  const expRaw = detail.match(/(?:^|\s)exp=(\d+)/)?.[1];
+  if (!kid || (mode !== 'ro' && mode !== 'rw') || !expRaw) return null;
+  const label = detail.match(/(?:^|\s)label=(.*)$/)?.[1]?.trim() ?? '';
+  return {kid, mode, exp: Number(expRaw), label};
+};
+
+export const credentialStatus = (exp: number, nowSec = Date.now() / 1000): 'active' | 'expired' => nowSec > exp ? 'expired' : 'active';
+
+export type CredentialEnv = {
+  endpoint: string; accessKeyId: string; secretAccessKey: string; sessionToken: string;
+  bucket: string; prefix: string; mode: 'ro' | 'rw';
+};
+
+export const credentialEnvText = (c: CredentialEnv) => [
+  `STORZO_ENDPOINT=${c.endpoint}`,
+  `STORZO_ACCESS_KEY_ID=${c.accessKeyId}`,
+  `STORZO_SECRET_ACCESS_KEY=${c.secretAccessKey}`,
+  `STORZO_SESSION_TOKEN=${c.sessionToken}`,
+  `STORZO_BUCKET=${c.bucket}`,
+  `STORZO_PREFIX=${c.prefix}`,
+  `STORZO_MODE=${c.mode}`,
+].join('\n');
+
+export const credentialMcpJson = (c: CredentialEnv) => JSON.stringify({
+  mcpServers: {
+    storzo: {
+      command: 'storzo-mcp',
+      env: {
+        STORZO_ENDPOINT: c.endpoint,
+        STORZO_ACCESS_KEY_ID: c.accessKeyId,
+        STORZO_SECRET_ACCESS_KEY: c.secretAccessKey,
+        STORZO_SESSION_TOKEN: c.sessionToken,
+        STORZO_BUCKET: c.bucket,
+        STORZO_PREFIX: c.prefix,
+        STORZO_MODE: c.mode,
+      },
+    },
+  },
+}, null, 2);
+
 export const whenShort = (s: string) => s ? new Date(s).toLocaleString(undefined, {month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'}) : '—';
 export const bucketNameError = (n: string) => !n ? '' : n.length < 3 || n.length > 63 ? 'Use 3 to 63 characters.' : /[^a-z0-9.-]/.test(n) ? 'Use only lowercase letters, numbers, hyphens or dots (no spaces, capitals or underscores).' : !/^[a-z0-9].*[a-z0-9]$/.test(n) ? 'Start and end with a letter or number.' : /\.\.|\.-|-\./.test(n) ? 'Do not put dots next to dots or hyphens.' : /^\d+\.\d+\.\d+\.\d+$/.test(n) ? 'Do not use an IP address.' : '';

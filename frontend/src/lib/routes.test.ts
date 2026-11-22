@@ -14,6 +14,10 @@ describe('pageFromHash', () => {
   it('parses known pages', () => {
     at('#/buckets');
     expect(pageFromHash()).toEqual({ page: 'buckets', id: null });
+    at('#/credentials');
+    expect(pageFromHash()).toEqual({ page: 'credentials', id: null });
+    at('#credentials');
+    expect(pageFromHash()).toEqual({ page: 'credentials', id: null });
   });
   it('parses an activity id and rejects non-numeric ids', () => {
     at('#/activity/12');

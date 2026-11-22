@@ -14,6 +14,7 @@ Status meanings: **Implemented** = source code exists, subject to end-to-end val
 | React UI | Presigned download link | Implemented | Requires public S3 endpoint / local port-forward |
 | React UI | Activity log | Implemented | Console actions and gateway requests; gateway rows show method, allow/deny and status; filter by source and decision (server-side, `GET /api/audit?source=&decision=`); 24-hour timestamps; skip link. Not tested with a screen reader |
 | React UI | Settings / Health | Implemented | Single admin only. The "Before production" list shows open items as unchecked; nothing on that page asserts production readiness |
+| React UI | Agent credentials | Implemented | `#/credentials` issues via `POST /api/credentials` (bucket, prefix ending in `/`, ro/rw, TTL presets up to the 1 hour server max) and shows the secret and session token once, plus storzo-mcp env and MCP JSON. Recent rows are `credential.issue` audit events. Revoke calls `POST /api/credentials/{kid}/revoke` and, on 404 or 405, says revoke is not available on this server yet. Playwright spec is written; not run against a live stack in this change |
 | Backend | Audit logging | Implemented | Local SQLite database with persistent volume |
 | Backend | SHA-256 of uploaded object | Implemented | Added to S3 object metadata for UI uploads |
 | Backend | S3 SigV4/S3 SDK support | Delegated | The SDK talks to the Storzo gateway, which verifies and forwards to SeaweedFS; SeaweedFS does the S3 work |
@@ -36,6 +37,7 @@ Status meanings: **Implemented** = source code exists, subject to end-to-end val
 | Ops | Docker Compose | Implemented as config | Not run by authoring environment |
 | Ops | Frontend/backend Dockerfiles | Implemented as source | Local image build still required |
 | Ops | Helm chart and SeaweedFS chart values | Implemented as config | Unvalidated live deployment; adjust cluster needs |
+| Ops | Kubernetes NetworkPolicy | Implemented as config | `deploy/helm/storzo/templates/networkpolicy.yaml`, `networkPolicy.enabled` default false. When on: default-deny ingress for backend and gateway; frontend and gateway may reach backend:8000; `networkPolicy.clients` may reach gateway:8333; backend and gateway may egress to the storage selector and cluster DNS. `/api/internal` has no extra ingress; the frontend nginx still returns 404 for it, and the backend Service must stay unpublished. Not applied to a live cluster in this change |
 | Ops | Secrets generator | Implemented | Random generated secret; local .env only |
 | Ops | Backend unit tests | Implemented and passed | Fake-S3 suite; CI also runs ruff, mypy and an 85% coverage floor |
 | Ops | Gateway Go tests | Implemented | CI runs gofmt, vet and race tests; gateway image is built and Trivy-scanned in CI |
