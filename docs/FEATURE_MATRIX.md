@@ -29,6 +29,7 @@ Status meanings: **Implemented** = source code exists, subject to end-to-end val
 | Gateway | Scoped credential revocation | Implemented | Admin POST with login and CSRF. Gateway polls an HMAC-authenticated internal feed every 10 s by default, returns 403 AccessDenied for cached revoked keys, and retains its last successful snapshot during backend outages |
 | Gateway | Audit emitter | Implemented | Batched, bounded queue, 4 attempts, `Failed()`/`Dropped()` counters, drains on shutdown. No disk spool |
 | Ops | SeaweedFS internal-only | Implemented in Compose | `storage` publishes no port; Kubernetes has no NetworkPolicy yet, so another pod may reach SeaweedFS directly (unverified) |
+| Backend | Cloud connect Phase 1 (one-time copy from AWS S3 / S3-compatible via rclone) | Implemented | `POST /api/migrations/estimate`, `POST /api/migrations`, `GET /api/migrations[/{id}]`, `POST /api/migrations/{id}/cancel`; one job at a time; `rclone check --one-way` verify; not sync/continuous; GCS/Azure not supported. See docs/CLOUD_CONNECT.md |
 | Backend | Per-tenant quota | Planned | Requires policy/identity model |
 | Backend | Content-addressable dedupe | Planned | Metadata/references and race safety needed |
 | Backend | Automatic original-preserving variants | Planned | Needs async queue and cache invalidation |
