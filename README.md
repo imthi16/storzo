@@ -162,7 +162,7 @@ How it works: the console API issues a signed token and a secret derived from it
 | Audit: `gateway.request` rows in the Activity trail | Gateway emitter to `POST /api/internal/audit` (HMAC-signed, blocked at nginx) |
 | `storzo-mcp`, a stdio [MCP](https://modelcontextprotocol.io) server | `gateway/cmd/storzo-mcp`: `list_objects`, `get_object`, plus `put_object` and `delete_object` for `rw` |
 
-Scope rules: `ro` may `GET`, `HEAD` and list inside the prefix; `rw` may also `PUT`, multipart upload and `DELETE` there. Everything else is 403 (another prefix or bucket, listing without a prefix, bucket-level calls such as CreateBucket). `..` keys are 400. CopyObject and `aws-chunked` streaming uploads are 501. For scoped credentials the gateway forwards only `x-amz-meta-*` and checksum headers; ACL, object-lock, encryption and storage-class headers are dropped.
+Scope rules: `ro` may `GET`, `HEAD` and list inside the prefix; `rw` may also `PUT`, multipart upload and `DELETE` there. Everything else is 403 (another prefix or bucket, listing without a prefix, bucket-level calls such as CreateBucket). `..` keys are 400. CopyObject is 501, and so are `aws-chunked` variants other than signed, trailer-free PUTs (see the limits below). For scoped credentials the gateway forwards only `x-amz-meta-*` and checksum headers; ACL, object-lock, encryption and storage-class headers are dropped.
 
 Issue a credential (signed in, with the CSRF token from your session):
 
