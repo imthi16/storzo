@@ -10,14 +10,19 @@ import base64
 import hashlib
 import hmac
 import json
+import re
 import secrets
 import time
 import uuid
+from contextlib import closing
 
-from app import config
+from app import config, db
 
 MAX_TTL = 3600
 SKEW = 60
+# Keep a revocation through token expiry leeway plus backend/gateway clock skew.
+_REVOCATION_LEEWAY = 2 * SKEW
+_KID = re.compile(r'STZ[A-Z2-7]{16}')
 
 
 def _b64(raw: bytes) -> str:
@@ -55,3 +60,32 @@ def verify(token: str, now: int | None = None) -> dict:
     if (int(time.time()) if now is None else now) > claims['exp'] + SKEW:
         raise ValueError('expired')
     return claims
+
+
+def revoke(kid: str) -> bool:
+    if not _KID.fullmatch(kid):
+        return False
+    with closing(db.connect()) as conn, conn:
+        row = conn.execute(
+            "SELECT bucket, object_key, detail FROM audit WHERE action = 'credential.issue' AND detail GLOB ? "
+            "ORDER BY id DESC LIMIT 1", (f'kid={kid} mode=*',),
+        ).fetchone()
+        if row is None:
+            return False
+        bucket, prefix, detail = row
+        # The expiry precedes the optional label, which can contain arbitrary text.
+        expires_at = int(detail.split(' ', 3)[2].removeprefix('exp='))
+        now = int(time.time())
+        conn.execute('DELETE FROM revoked_kids WHERE expires_at < ?', (now - _REVOCATION_LEEWAY,))
+        conn.execute('INSERT OR IGNORE INTO revoked_kids VALUES (?, ?, ?)', (kid, now, expires_at))
+    db.audit('credential.revoke', bucket, prefix, f'kid={kid}')
+    return True
+
+
+def revoked_since(since: int, now: int) -> list[str]:
+    with closing(db.connect()) as conn:
+        rows = conn.execute(
+            'SELECT kid FROM revoked_kids WHERE revoked_at >= ? AND expires_at >= ? ORDER BY kid',
+            (since, now - _REVOCATION_LEEWAY),
+        ).fetchall()
+    return [kid for (kid,) in rows]
