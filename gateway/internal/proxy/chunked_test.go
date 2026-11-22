@@ -21,6 +21,11 @@ import (
 // Build the wire chain independently of the verifier and its SDK stream signer.
 func signedChunkRequest(t *testing.T) *http.Request {
 	t.Helper()
+	return signedChunkRequestOf(t, []string{"hello ", "world", ""})
+}
+
+func signedChunkRequestOf(t *testing.T, chunks []string) *http.Request {
+	t.Helper()
 	const marker = "STREAMING-AWS4-HMAC-SHA256-PAYLOAD"
 	const region = "us-west-2"
 	now := time.Now().UTC()
@@ -30,8 +35,11 @@ func signedChunkRequest(t *testing.T) *http.Request {
 	r := httptest.NewRequest("PUT", "http://gateway.test/agent-data/run-42/object", nil)
 	r.Header.Set("Content-Encoding", "aws-chunked, gzip")
 	r.Header.Set("X-Amz-Content-Sha256", marker)
-	r.Header.Set("X-Amz-Decoded-Content-Length", "11")
-	chunks := []string{"hello ", "world", ""}
+	decoded := 0
+	for _, chunk := range chunks {
+		decoded += len(chunk)
+	}
+	r.Header.Set("X-Amz-Decoded-Content-Length", fmt.Sprint(decoded))
 	for _, chunk := range chunks {
 		r.ContentLength += int64(len(fmt.Sprintf("%x;chunk-signature=%064x\r\n%s\r\n", len(chunk), 0, chunk)))
 	}
@@ -104,5 +112,28 @@ func TestSignedChunkProxy(t *testing.T) {
 				t.Fatalf("status=%d calls=%d body=%s", w.Code, calls.Load(), w.Body.String())
 			}
 		})
+	}
+}
+
+// protects=a signed chunked body larger than bufio's 4096-byte buffer still verifies (the chunk
+// signature was once decoded from a buffer the data read had already refilled; found on the live stack);
+// fails_when=a chunk header is read from reused buffer memory after chunk data is consumed;
+// no_claim=live SeaweedFS compatibility.
+func TestSignedChunkProxyLargerThanReadBuffer(t *testing.T) {
+	payload := strings.Repeat("0123456789abcdef", 1500) // 24000 bytes: three data chunks plus the final one
+	chunks := []string{payload[:9000], payload[9000:18000], payload[18000:], ""}
+	var got []byte
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got, _ = io.ReadAll(r.Body)
+	}))
+	defer upstream.Close()
+	handler, err := New(config(upstream.URL), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, signedChunkRequestOf(t, chunks))
+	if w.Code != 200 || string(got) != payload {
+		t.Fatalf("status=%d decoded=%d bytes want %d; body=%s", w.Code, len(got), len(payload), w.Body.String())
 	}
 }

@@ -70,6 +70,9 @@ func decodeChunks(r *http.Request, creds aws.Credentials, region, seed, encoding
 		if err != nil || size > length-int64(body.Len()) {
 			return "", signatureError()
 		}
+		// fields point into bufio's buffer; the data read below can refill it, so decode the
+		// chunk signature now (a body larger than the 4096-byte buffer failed live otherwise).
+		supplied, _ := hex.DecodeString(string(fields[2]))
 		start := body.Len()
 		if _, err := io.CopyN(&body, wire, size); err != nil {
 			return "", chunkReadError(err)
@@ -81,7 +84,6 @@ func decodeChunks(r *http.Request, creds aws.Credentials, region, seed, encoding
 		if end != [2]byte{'\r', '\n'} {
 			return "", signatureError()
 		}
-		supplied, _ := hex.DecodeString(string(fields[2]))
 		expected, err := signer.GetSignature(r.Context(), nil, body.Bytes()[start:], date)
 		if err != nil || !hmac.Equal(expected, supplied) {
 			return "", signatureError()
