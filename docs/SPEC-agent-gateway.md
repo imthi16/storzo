@@ -215,7 +215,7 @@ Verified on Docker Compose with `scripts/gateway_e2e.py` (35 checks) unless note
 | 8 | Bucket-level calls 403 for every agent key | Verified |
 | 9 | SeaweedFS not reachable from the host except through the gateway | Verified by hand in Compose (`storage` publishes no port). Not in the script. Not true in Kubernetes without a NetworkPolicy |
 | 10 | Every issue and every request audited with kid, decision, status | Verified by a per-request ledger. The `kid` is recorded for allowed requests and for authenticated denials; it is empty when authentication failed (see below) |
-| 11 | MCP `ro` has no `put_object`/`delete_object`; the S3 op still returns 403 | `tools/list` covered by MCP unit tests; the 403 by the e2e `ro` PUT. A test running the MCP server through the real proxy handler was not written |
+| 11 | MCP `ro` has no `put_object`/`delete_object`; the S3 op still returns 403 | `tools/list` covered by MCP unit tests; the 403 by the e2e `ro` PUT; the MCP server through the real proxy handler by `TestGatewayROCredential` and `TestGatewayRWCredential` (`gateway/cmd/storzo-mcp/gateway_integration_test.go`) |
 | 12 | Each test states protects / fails_when / no_claim | Applied to the tests added for this work; older tests were not audited |
 | 13 | Existing backend tests, frontend build and Playwright pass unchanged | Backend and frontend lint/test/build pass in CI. The `e2e` CI job runs the Playwright specs (10 passed on main) |
 
