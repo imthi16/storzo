@@ -28,7 +28,7 @@ Status meanings: **Implemented** = source code exists, subject to end-to-end val
 | Gateway | MCP stdio server (`storzo-mcp`) | Implemented | Unit tests use a fake S3; `gateway/cmd/storzo-mcp/gateway_integration_test.go` runs it through the real proxy handler (`ro` and `rw`). Also checked by hand against the live Compose stack from Claude Code, Codex, OpenCode, Cursor and Muse (2026-11-22) |
 | Gateway | S3 proxy (`storzo-gateway`) | Implemented | Re-signs with the master key; scoped requests forward only an `x-amz-*` allowlist; master clients pass through (ACL headers stripped); CopyObject and `aws-chunked` return 501. Load not measured beyond single 50 MB objects, a few runs: direct put 62-95 / get 213-227 MB/s, via gateway put 51-62 / get 230-244 MB/s |
 | Gateway | Audit emitter | Implemented | Batched, bounded queue, 4 attempts, `Failed()`/`Dropped()` counters, drains on shutdown. No disk spool |
-| Ops | SeaweedFS internal-only | Implemented in Compose | `storage` publishes no port; Kubernetes has no NetworkPolicy yet, so another pod may reach SeaweedFS directly (unverified) |
+| Ops | SeaweedFS internal-only | Implemented in Compose | `storage` publishes no port; on Kubernetes, another pod may reach SeaweedFS directly unless the optional NetworkPolicy is enabled (default off, never applied to a cluster; see the NetworkPolicy row) |
 | Backend | Per-tenant quota | Planned | Requires policy/identity model |
 | Backend | Content-addressable dedupe | Planned | Metadata/references and race safety needed |
 | Backend | Automatic original-preserving variants | Planned | Needs async queue and cache invalidation |
