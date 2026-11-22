@@ -2,7 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { Copy, KeyRound } from 'lucide-react';
 import type { ActivityPage, Bucket } from '../types';
 import { ApiError, call } from '../api/client';
-import { CREDENTIAL_TTL_PRESETS, auditListQuery, credentialEnvText, credentialMcpJson, credentialStatus, enc, parseIssueDetail, prefixError, ttlPresetEnabled, when, type IssuedDetail } from '../lib/format';
+import { CREDENTIAL_TTL_PRESETS, auditListQuery, credentialEnvText, credentialMcpJson, credentialSigningUnavailable, credentialStatus, enc, msUntilCredentialExpiry, parseIssueDetail, prefixError, ttlPresetEnabled, when, type IssuedDetail } from '../lib/format';
 import '../credentials.css';
 
 type IssuedRow = IssuedDetail & {id: number; ts: string; bucket: string | null; prefix: string | null};
@@ -37,6 +37,7 @@ export function CredentialsPage({csrf, askConfirm, show, fail, reloadNonce}: Pro
   const [revoked, setRevoked] = useState<string[]>([]);
   const [revoking, setRevoking] = useState('');
   const [localReload, setLocalReload] = useState(0);
+  const [nowMs, setNowMs] = useState(() => Date.now());
 
   useEffect(() => {
     let live = true;
@@ -57,6 +58,13 @@ export function CredentialsPage({csrf, askConfirm, show, fail, reloadNonce}: Pro
     }).catch(e => { if (live) fail(e); });
     return () => { live = false; };
   }, [reloadNonce, localReload]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    const wait = msUntilCredentialExpiry(rows.filter(row => !revoked.includes(row.kid)).map(row => row.exp), nowMs);
+    if (wait == null) return;
+    const id = window.setTimeout(() => setNowMs(Date.now()), wait);
+    return () => window.clearTimeout(id);
+  }, [rows, revoked, nowMs]);
 
   const prefixProblem = (tried || prefix) ? prefixError(prefix) : '';
   const copy = async (id: string, value: string, labelText: string) => {
@@ -87,7 +95,7 @@ export function CredentialsPage({csrf, askConfirm, show, fail, reloadNonce}: Pro
       setLocalReload(n => n + 1);
       show('Credential issued. Copy the secret now; it will not be shown again.');
     } catch (err) {
-      if (err instanceof ApiError && err.status === 503) show('Agent credentials are not configured on this server (CRED_SIGNING_KEY).');
+      if (err instanceof ApiError && credentialSigningUnavailable(err.status, err.detail)) show('Agent credentials are not configured on this server (CRED_SIGNING_KEY).');
       else fail(err);
     } finally { setIssuing(false); }
   };
@@ -181,7 +189,7 @@ export function CredentialsPage({csrf, askConfirm, show, fail, reloadNonce}: Pro
       {auditTotal > 200 && <p className="panel-note">This list is the credential issues inside the latest 200 console audit events.</p>}
       {rows.length === 0 ? <p className="cred-empty">No credentials have been issued yet.</p> : <ul className="cred-list">
         {rows.map(row => {
-          const status = revoked.includes(row.kid) ? 'revoked' : credentialStatus(row.exp);
+          const status = revoked.includes(row.kid) ? 'revoked' : credentialStatus(row.exp, nowMs / 1000);
           return <li key={row.id}>
             <div>
               <strong className="cred-kid">{row.kid}</strong>

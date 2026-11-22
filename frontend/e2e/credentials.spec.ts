@@ -36,9 +36,9 @@ test('issue a read-only credential and show the secret once', async ({ page }) =
   await expect(once).toContainText('cannot be shown again');
   const secret = (await page.getByTestId('credential-secret').innerText()).trim();
   expect(secret.length).toBeGreaterThan(16);
-  await expect(page.getByTestId('credential-env')).toContainText('STORZO_MODE=ro');
-  await expect(page.getByTestId('credential-env')).toContainText(`STORZO_BUCKET=${bucket}`);
-  await expect(page.getByTestId('credential-env')).toContainText('STORZO_PREFIX=agents/');
+  await expect(page.getByTestId('credential-env')).toContainText("STORZO_MODE='ro'");
+  await expect(page.getByTestId('credential-env')).toContainText(`STORZO_BUCKET='${bucket}'`);
+  await expect(page.getByTestId('credential-env')).toContainText("STORZO_PREFIX='agents/'");
   await expect(page.getByTestId('credential-mcp')).toContainText('storzo-mcp');
   expect(page.url()).not.toContain(secret);
   const stored = await page.evaluate(() => JSON.stringify(localStorage));

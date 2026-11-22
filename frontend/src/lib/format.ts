@@ -141,19 +141,36 @@ export const parseIssueDetail = (detail: string | null | undefined): IssuedDetai
 
 export const credentialStatus = (exp: number, nowSec = Date.now() / 1000): 'active' | 'expired' => nowSec > exp ? 'expired' : 'active';
 
+// setTimeout delays above 2^31-1 ms overflow. Cap and reschedule.
+const SET_TIMEOUT_MAX_MS = 2_147_483_647;
+
+/** Delay until now is past the soonest still-active expiry, or null when none remain. */
+export const msUntilCredentialExpiry = (exps: number[], nowMs: number): number | null => {
+  const nowSec = nowMs / 1000;
+  let next = Infinity;
+  for (const exp of exps) if (exp >= nowSec && exp < next) next = exp;
+  if (!Number.isFinite(next)) return null;
+  return Math.min(SET_TIMEOUT_MAX_MS, Math.max(0, next * 1000 - nowMs) + 1);
+};
+
+export const credentialSigningUnavailable = (status: number, detail: string) =>
+  status === 503 && detail.startsWith('Agent credentials are not configured');
+
+const shellSingle = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
+
 export type CredentialEnv = {
   endpoint: string; accessKeyId: string; secretAccessKey: string; sessionToken: string;
   bucket: string; prefix: string; mode: 'ro' | 'rw';
 };
 
 export const credentialEnvText = (c: CredentialEnv) => [
-  `STORZO_ENDPOINT=${c.endpoint}`,
-  `STORZO_ACCESS_KEY_ID=${c.accessKeyId}`,
-  `STORZO_SECRET_ACCESS_KEY=${c.secretAccessKey}`,
-  `STORZO_SESSION_TOKEN=${c.sessionToken}`,
-  `STORZO_BUCKET=${c.bucket}`,
-  `STORZO_PREFIX=${c.prefix}`,
-  `STORZO_MODE=${c.mode}`,
+  `STORZO_ENDPOINT=${shellSingle(c.endpoint)}`,
+  `STORZO_ACCESS_KEY_ID=${shellSingle(c.accessKeyId)}`,
+  `STORZO_SECRET_ACCESS_KEY=${shellSingle(c.secretAccessKey)}`,
+  `STORZO_SESSION_TOKEN=${shellSingle(c.sessionToken)}`,
+  `STORZO_BUCKET=${shellSingle(c.bucket)}`,
+  `STORZO_PREFIX=${shellSingle(c.prefix)}`,
+  `STORZO_MODE=${shellSingle(c.mode)}`,
 ].join('\n');
 
 export const credentialMcpJson = (c: CredentialEnv) => JSON.stringify({
