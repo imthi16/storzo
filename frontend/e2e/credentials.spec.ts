@@ -22,7 +22,7 @@ test('issue a read-only credential and show the secret once', async ({ page }) =
 
   await page.getByRole('button', { name: 'Credentials' }).click();
   await expect(page).toHaveURL(/#\/credentials$/);
-  await page.getByLabel('Bucket', { exact: true }).selectOption(bucket);
+  await page.getByRole('combobox', { name: 'Bucket' }).selectOption(bucket);
   await page.getByLabel('Prefix').fill('agents');
   await page.getByRole('button', { name: 'Issue credential' }).click();
   await expect(page.getByRole('alert')).toContainText('Prefix must end with /.');

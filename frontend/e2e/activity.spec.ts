@@ -67,7 +67,11 @@ test.describe('activity log and settings', () => {
       const res = await page.request.get(`/api/audit?limit=1${query}`);
       return ((await res.json()) as { total: number }).total;
     };
-    const [all, console_, gateway] = [await total(''), await total('&source=console'), await total('&source=gateway')];
+    // Read "all" last: rows are only ever added, and other specs write while this one runs, so an earlier
+    // "all" can be smaller than the later per-source totals.
+    const console_ = await total('&source=console');
+    const gateway = await total('&source=gateway');
+    const all = await total('');
     expect(console_, 'expected at least one console row (the login event)').toBeGreaterThan(0);
     expect(all).toBeGreaterThanOrEqual(console_ + gateway);
     await expect(page.getByText(/Showing 1-\d+ of /).first()).toBeVisible();
