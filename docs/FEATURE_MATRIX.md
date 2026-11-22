@@ -28,6 +28,7 @@ Status meanings: **Implemented** = source code exists, subject to end-to-end val
 | Gateway | S3 proxy (`storzo-gateway`) | Implemented | Re-signs with the master key; scoped requests forward only an `x-amz-*` allowlist; master clients pass through (ACL headers stripped); CopyObject and `aws-chunked` return 501. Load not measured beyond single 50 MB objects, a few runs: direct put 62-95 / get 213-227 MB/s, via gateway put 51-62 / get 230-244 MB/s |
 | Gateway | Audit emitter | Implemented | Batched, bounded queue, 4 attempts, `Failed()`/`Dropped()` counters, drains on shutdown. No disk spool |
 | Ops | SeaweedFS internal-only | Implemented in Compose | `storage` publishes no port; Kubernetes has no NetworkPolicy yet, so another pod may reach SeaweedFS directly (unverified) |
+| Backend | Cloud connect Phase 1 (one-time copy from AWS S3 / S3-compatible via rclone) | Implemented | `POST /api/migrations/estimate`, `POST /api/migrations`, `GET /api/migrations[/{id}]`, `POST /api/migrations/{id}/cancel`; one job at a time; `rclone check --one-way` verify; not sync/continuous; GCS/Azure not supported. See docs/CLOUD_CONNECT.md |
 | Backend | Per-tenant quota | Planned | Requires policy/identity model |
 | Backend | Content-addressable dedupe | Planned | Metadata/references and race safety needed |
 | Backend | Automatic original-preserving variants | Planned | Needs async queue and cache invalidation |
