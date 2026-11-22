@@ -1,6 +1,8 @@
 import json
 import os
 import stat
+import subprocess
+import threading
 import time
 
 os.environ.setdefault('ADMIN_PASSWORD', 'StrongPasswordForTests12345')
@@ -26,6 +28,8 @@ if [ -z "$RCLONE_CONFIG_SRC_SECRET_ACCESS_KEY" ]; then echo "missing env secret"
 mode=$(cat "$(dirname "$0")/mode" 2>/dev/null || echo ok)
 cmd="$1"
 if [ "$cmd" = "copy" ]; then
+  case " $* " in *" --stats-log-level NOTICE "*) ;; *) echo "missing --stats-log-level NOTICE" >&2; exit 45;; esac
+  : > "$(dirname "$0")/launched"
   if [ "$mode" = "fail" ]; then
     printf '%s\n' '{"level":"error","msg":"fake copy failure","stats":{"bytes":0,"totalBytes":10,"transfers":0,"totalTransfers":2,"errors":1}}' >&2
     exit 1
@@ -248,6 +252,135 @@ MODE_FILE = None
 def set_mode(mode):
     # A file, not an env var: build_env deliberately drops non-allowlisted variables.
     MODE_FILE.write_text(mode)
+
+
+def test_concurrent_starts_exactly_one_201(monkeypatch, tmp_path):
+    c, fake = setup(monkeypatch, tmp_path)
+    try:
+        csrf = login(c)
+        set_mode('ok')
+        orig_head = fake.head_bucket
+
+        def slow_head(Bucket):
+            time.sleep(0.5)
+            return orig_head(Bucket)
+
+        fake.head_bucket = slow_head
+        statuses: list[int] = []
+
+        def post():
+            statuses.append(c.post('/api/migrations', json=body(), headers={'X-CSRF-Token': csrf}).status_code)
+
+        threads = [threading.Thread(target=post) for _ in range(6)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        assert statuses.count(201) == 1, statuses
+        assert statuses.count(409) == 5, statuses
+        jobs = c.get('/api/migrations').json()['items']
+        assert len([j for j in jobs if j['state'] in ('queued', 'running', 'verifying', 'done')]) == 1
+        wait_state(c, jobs[0]['id'], {'done'})
+    finally:
+        c.__exit__(None, None, None)
+
+
+def test_cancel_queued_job_never_launches_copy(monkeypatch, tmp_path):
+    c, _ = setup(monkeypatch, tmp_path)
+    try:
+        login(c)
+        set_mode('ok')
+        job = migrations.create_job({'bucket': 'src-bucket', 'prefix': ''},
+                                    {'bucket': 'demo-images', 'prefix': 'imported/'})
+        assert migrations.cancel_job(job['id']) is True
+        assert migrations.get_job(job['id'])['state'] == 'cancelled'
+        migrations.run_job(job['id'],
+                           {'bucket': 'src-bucket', 'prefix': '', 'access_key_id': AKID, 'secret_access_key': SECRET},
+                           {'bucket': 'demo-images', 'prefix': 'imported/'})
+        assert not (MODE_FILE.parent / 'launched').exists()
+        assert migrations.get_job(job['id'])['state'] == 'cancelled'
+    finally:
+        c.__exit__(None, None, None)
+
+
+def test_copy_command_includes_stats_log_level(monkeypatch, tmp_path):
+    c, _ = setup(monkeypatch, tmp_path)
+    try:
+        login(c)
+        captured: list[list[str]] = []
+
+        class FakeProc:
+            stderr = iter([])
+
+            def wait(self):
+                return 0
+
+        class FakeRun:
+            returncode = 0
+            stderr = ''
+            stdout = '{"count":1,"bytes":1}'
+
+        monkeypatch.setattr(subprocess, 'Popen', lambda *a, **k: (captured.append(list(a[0])), FakeProc())[1])
+        monkeypatch.setattr(subprocess, 'run', lambda *a, **k: FakeRun())
+        job = migrations.create_job({'bucket': 'src-bucket', 'prefix': ''},
+                                    {'bucket': 'demo-images', 'prefix': 'imported/'})
+        migrations.run_job(job['id'],
+                           {'bucket': 'src-bucket', 'prefix': '', 'access_key_id': AKID, 'secret_access_key': SECRET},
+                           {'bucket': 'demo-images', 'prefix': 'imported/'})
+        assert captured, 'copy subprocess was not launched'
+        argv = captured[0]
+        i = argv.index('--stats-log-level')
+        assert argv[i + 1] == 'NOTICE'
+        assert migrations.get_job(job['id'])['state'] == 'done'
+    finally:
+        c.__exit__(None, None, None)
+
+
+def test_prefix_must_be_empty_or_end_with_slash(monkeypatch, tmp_path):
+    c, _ = setup(monkeypatch, tmp_path)
+    try:
+        csrf = login(c)
+        set_mode('ok')
+        monkeypatch.setattr(migrations, 'make_source_client', lambda src: FakeSource())
+        bad_source = body()
+        bad_source['source']['prefix'] = 'logs/2026-'
+        bad_dest = body()
+        bad_dest['destination']['prefix'] = 'imported-2026'
+        for payload in (bad_source, bad_dest):
+            for url in ('/api/migrations/estimate', '/api/migrations'):
+                r = c.post(url, json=payload, headers={'X-CSRF-Token': csrf})
+                assert r.status_code == 400, (url, payload, r.text)
+                assert 'end with "/"' in r.json()['detail']
+        good = body()
+        good['source']['prefix'] = 'logs/2026/'
+        r = c.post('/api/migrations/estimate', json=good, headers={'X-CSRF-Token': csrf})
+        assert r.status_code == 200, r.text
+        r = c.post('/api/migrations', json=good, headers={'X-CSRF-Token': csrf})
+        assert r.status_code == 201, r.text
+        assert wait_state(c, r.json()['id'], {'done'})['state'] == 'done'
+    finally:
+        c.__exit__(None, None, None)
+
+
+def test_interrupted_migration_failed_on_startup(monkeypatch, tmp_path):
+    c, _ = setup(monkeypatch, tmp_path)
+    try:
+        csrf = login(c)
+        set_mode('ok')
+        job = migrations.create_job({'bucket': 'src-bucket', 'prefix': ''},
+                                    {'bucket': 'demo-images', 'prefix': 'imported/'})
+        migrations.update_job(job['id'], state='running')
+        main.startup()
+        failed = migrations.get_job(job['id'])
+        assert failed['state'] == 'failed'
+        assert 'interrupted by a backend restart' in failed['errors']
+        audit = c.get('/api/audit').json()['items']
+        assert any('interrupted by a backend restart' in (a.get('detail') or '') for a in audit)
+        r = c.post('/api/migrations', json=body(), headers={'X-CSRF-Token': csrf})
+        assert r.status_code == 201, r.text
+        assert wait_state(c, r.json()['id'], {'done'})['state'] == 'done'
+    finally:
+        c.__exit__(None, None, None)
 
 
 def test_fast_copy_without_progress_still_reports_counts(monkeypatch, tmp_path):

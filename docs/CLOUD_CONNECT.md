@@ -19,6 +19,10 @@ All POST routes require login + CSRF (`require_write`); GET routes require login
 ```
 
 `endpoint` is optional for AWS (omit/`null`); set it for S3-compatible stores.
+Source and destination prefixes must be empty or end with `/` (for example
+`photos/` or `logs/2026/`); both routes return `400` otherwise. rclone treats
+a prefix as a directory path, so a partial name such as `logs/2026-` would
+copy nothing, while a literal key-prefix estimate would count matching keys.
 Returns (bounded scan, `MIGRATION_SCAN_LIMIT`, default 3000 objects, like the
 dashboard scan):
 
@@ -36,9 +40,15 @@ change and same-region/same-provider transfers may cost less or nothing.
 ### `POST /api/migrations` → `201` job object
 
 Starts the copy. `409` if a migration is already running (one at a time —
-documented limit), `404`/`503` from S3 checks if the destination bucket does
-not exist, and `503` with a clear message if `rclone` is not available at
-runtime. Destination must be an existing Storzo bucket.
+documented limit; the check and the queued-row insert are one atomic
+reservation, so concurrent requests get exactly one `201`), `404`/`503` from
+S3 checks if the destination bucket does not exist, and `503` with a clear
+message if `rclone` is not available at runtime. Destination must be an
+existing Storzo bucket. Cancelling a queued job prevents its copy from ever
+launching. On backend startup, any job left in `queued`, `running` or
+`verifying` by a restart is marked `failed` with the error
+`interrupted by a backend restart` (and audited), so it no longer blocks
+new migrations forever.
 
 ### `GET /api/migrations` · `GET /api/migrations/{id}`
 
@@ -66,9 +76,13 @@ Audit actions: `migration.start`, `migration.finish`, `migration.cancel`
 ## How the copy runs
 
 - Tool: **rclone**, subprocess, never a shell. Exact flags:
-  - Copy: `rclone copy src:<bucket>[/<prefix>] dst:<bucket>[/<prefix>] --use-json-log --stats=1s --stats-one-line`
+  - Copy: `rclone copy src:<bucket>[/<prefix>] dst:<bucket>[/<prefix>] --use-json-log --stats=1s --stats-one-line --stats-log-level NOTICE`
     (`--use-json-log` makes progress parseable; `--stats=1s` emits stats every
-    second; `--stats-one-line` keeps each stat on one line). Progress
+    second; `--stats-one-line` keeps each stat on one line; `--stats-log-level
+    NOTICE` is required because rclone logs stats at `INFO` by default while
+    its default log level is `NOTICE`, so stats would otherwise never be
+    emitted — see the `--stats-log-level` section of the rclone docs).
+    Progress
     (`bytes`/`transfers`/`totalBytes`/`totalTransfers`) is parsed from the
     JSON log lines on stderr and written to the job row.
   - Verify: `rclone check src:… dst:… --one-way --use-json-log` — exit 0 →
@@ -91,11 +105,11 @@ from a LAN S3-compatible store — and understand that this re-opens SSRF risk.
 
 ## rclone version pin
 
-`backend/Dockerfile` pins **rclone v1.68.2** (`linux-amd64` zip) and verifies
-SHA-256 `0e6fa18051e67fc600d803a2dcb10ddedb092247fc6eee61be97f64ec080a13c`,
+`backend/Dockerfile` pins **rclone v1.76.0** (`linux-amd64` zip) and verifies
+SHA-256 `b00f00b3266c3764413afe599d3ec316f6f43b3e0ea8a0bc1d186d2133e46df7`,
 taken from the official `SHA256SUMS` at
-`https://downloads.rclone.org/v1.68.2/SHA256SUMS` (fetched and checked when
-this was written; no `curl | sh`). Bump version + checksum together.
+`https://downloads.rclone.org/v1.76.0/SHA256SUMS` (fetched and checked when
+2026-11-23; no `curl | sh`). Bump version + checksum together. v1.68.2 was replaced because its binary was built with Go 1.23.3 and CI's Trivy scan reported 58 stdlib CVEs (2 critical, 56 high) in it; v1.76.0 is built with Go 1.27.3. The SHA256SUMS file and the zip come from the same host, so the pin proves integrity against a changed download, not against a compromised release.
 
 ## Environment
 

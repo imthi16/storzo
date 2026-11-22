@@ -33,6 +33,14 @@ export const verifyLabel = (job: Pick<MigrationJob, 'verify_status' | 'state'>):
   return job.state === 'verifying' ? 'Verifying…' : 'Not verified yet';
 };
 
+export const prefixValidationError = (f: MigrationForm): string | null => {
+  if (f.sourcePrefix.trim() && !f.sourcePrefix.trim().endsWith('/'))
+    return 'Source prefix must be empty or end with "/" (for example "logs/2026/"): a prefix is a folder, not a partial name.';
+  if (f.destPrefix.trim() && !f.destPrefix.trim().endsWith('/'))
+    return 'Destination prefix must be empty or end with "/" (for example "imported/"): a prefix is a folder, not a partial name.';
+  return null;
+};
+
 export const toRequest = (f: MigrationForm) => ({
   source: {
     endpoint: f.endpoint.trim() || null, region: f.region.trim() || 'us-east-1',

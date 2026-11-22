@@ -15,6 +15,8 @@ def _validate(body: MigrationRequest) -> tuple[dict, dict]:
         safe_key(body.source.prefix)
     if body.destination.prefix:
         safe_key(body.destination.prefix)
+    migrations.validate_prefix(body.source.prefix, 'Source')
+    migrations.validate_prefix(body.destination.prefix, 'Destination')
     migrations.validate_source_endpoint(body.source.endpoint)
     return body.source.model_dump(), body.destination.model_dump()
 
@@ -35,15 +37,22 @@ def start(body: MigrationRequest):
     source, dest = _validate(body)
     if not migrations.rclone_path():
         raise HTTPException(503, 'rclone is not available in this backend image; rebuild it with rclone installed (see docs/CLOUD_CONNECT.md)')
-    if migrations.active_job():
+    # Reserve the slot first: check-and-insert is one atomic step, so concurrent
+    # requests cannot both pass while the head_bucket check below is in flight.
+    job = migrations.create_job_if_no_active(source, dest)
+    if job is None:
         raise HTTPException(409, 'A migration is already running. Only one migration at a time is supported; cancel or wait for it first.')
     try:
         s3.s3_client().head_bucket(Bucket=dest['bucket'])
     except S3_ERRORS as exc:
+        migrations.delete_job(job['id'])
         s3_failure(exc)
+    except Exception:
+        migrations.delete_job(job['id'])
+        raise
     audit('migration.start', dest['bucket'], dest['prefix'] or None,
           f"source_bucket={source['bucket']} source_prefix={source['prefix']}")
-    return migrations.start_job(source, dest)
+    return migrations.launch_job(job, source, dest)
 
 
 @router.get('', dependencies=[Depends(require_login)])

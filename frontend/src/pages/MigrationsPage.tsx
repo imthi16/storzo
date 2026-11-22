@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { CloudDownload } from 'lucide-react';
 import { bytes } from '../lib/format';
 import {
-  cancelMigration, estimateMigration, isActive, listMigrations, progressPercent,
+  cancelMigration, estimateMigration, isActive, listMigrations, prefixValidationError, progressPercent,
   startMigration, verifyLabel, type Estimate, type MigrationForm, type MigrationJob,
 } from '../api/migrations';
 import '../migrations.css';
@@ -29,11 +29,17 @@ export function MigrationsPage({csrf, fail, show}: Props) {
   }, [active?.id, active?.state]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const doEstimate = async () => {
-    if (!csrf) return; setBusy(true);
+    if (!csrf) return;
+    const prefixError = prefixValidationError(form);
+    if (prefixError) { fail(new Error(prefixError)); return; }
+    setBusy(true);
     try { setEstimate(await estimateMigration(csrf, form)); } catch (e) { fail(e); } finally { setBusy(false); }
   };
   const doStart = async () => {
-    if (!csrf) return; setBusy(true);
+    if (!csrf) return;
+    const prefixError = prefixValidationError(form);
+    if (prefixError) { fail(new Error(prefixError)); return; }
+    setBusy(true);
     try { const job = await startMigration(csrf, form); setJobs(j => [job, ...j]); show('Migration started'); } catch (e) { fail(e); } finally { setBusy(false); }
   };
   const doCancel = async (id: string) => {
@@ -55,7 +61,7 @@ export function MigrationsPage({csrf, fail, show}: Props) {
         <label>Destination Storzo bucket (must already exist)<input value={form.destBucket} onChange={set('destBucket')} autoComplete="off"/></label>
         <label>Destination prefix<input value={form.destPrefix} onChange={set('destPrefix')} placeholder="imported/" autoComplete="off"/></label>
       </div>
-      <p className="panel-note">Source credentials are used only for this job, are passed to rclone via its environment, and are never stored or shown again.</p>
+      <p className="panel-note">Prefixes must be empty or end with <code>/</code> (for example <code>photos/</code>): a prefix is a folder, not a partial name such as <code>logs/2026-</code>. Source credentials are used only for this job, are passed to rclone via its environment, and are never stored or shown again.</p>
       <div className="mig-actions">
         <button className="secondary" onClick={doEstimate} disabled={busy || !csrf}>Estimate</button>
         <button className="primary" onClick={doStart} disabled={busy || !csrf || !!active}><CloudDownload size={16}/> Start one-time copy</button>

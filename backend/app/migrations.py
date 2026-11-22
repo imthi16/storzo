@@ -8,6 +8,7 @@ import json
 import os
 import shutil
 import socket
+import sqlite3
 import subprocess
 import threading
 import uuid
@@ -24,14 +25,28 @@ SCAN_LIMIT = int(os.getenv('MIGRATION_SCAN_LIMIT', '3000'))
 EGRESS_USD_PER_GB = float(os.getenv('MIGRATION_EGRESS_USD_PER_GB', '0.09'))
 ALLOW_PRIVATE = os.getenv('MIGRATION_ALLOW_PRIVATE_ENDPOINTS', 'false').lower() == 'true'
 MAX_ERRORS = 20
+ACTIVE_STATES = ('queued', 'running', 'verifying')
+INTERRUPTED_ERROR = 'interrupted by a backend restart'
 
 _lock = threading.Lock()
+_slot_lock = threading.Lock()
 _procs: dict[str, subprocess.Popen] = {}
 _cancelled: set[str] = set()
 
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _ensure_one_active_index(conn) -> None:
+    # Defence in depth below _slot_lock: at most one active row, even across processes.
+    # Fails on a legacy DB that already holds duplicate active rows; startup cleanup
+    # (fail_interrupted_jobs) clears those and re-runs this.
+    try:
+        conn.execute('''CREATE UNIQUE INDEX IF NOT EXISTS one_active_migration
+                        ON migrations ((1)) WHERE state IN ('queued','running','verifying')''')
+    except sqlite3.IntegrityError:
+        pass
 
 
 def init_migrations() -> None:
@@ -45,6 +60,31 @@ def init_migrations() -> None:
             total_bytes INTEGER NOT NULL DEFAULT 0, total_objects INTEGER NOT NULL DEFAULT 0,
             errors TEXT NOT NULL DEFAULT '[]',
             created_at TEXT NOT NULL, updated_at TEXT NOT NULL)''')
+        _ensure_one_active_index(conn)
+
+
+def fail_interrupted_jobs() -> int:
+    """Startup only: active rows have no worker after a restart, so fail them."""
+    from app.db import audit
+    init_migrations()
+    stale = [j for j in list_jobs(1000) if j['state'] in ACTIVE_STATES]
+    for job in stale:
+        update_job(job['id'], state='failed',
+                   errors=[*job['errors'], INTERRUPTED_ERROR][:MAX_ERRORS])
+        audit('migration.finish', job['dest_bucket'], job['dest_prefix'] or None,
+              f"id={job['id']} state=failed {INTERRUPTED_ERROR}")
+    if stale:
+        with db.connect() as conn:
+            _ensure_one_active_index(conn)
+    return len(stale)
+
+
+def validate_prefix(prefix: str, label: str) -> None:
+    # rclone treats a prefix as a directory path, so a partial name such as
+    # "logs/2026-" would copy nothing while the estimator counts matching keys.
+    if prefix and not prefix.endswith('/'):
+        raise HTTPException(400, f'{label} prefix must be empty or end with "/" '
+                                 f'(for example "logs/2026/"), got "{prefix}"')
 
 
 def _row_to_job(row) -> dict:
@@ -63,16 +103,34 @@ def create_job(source: dict, dest: dict, total_objects: int = 0, total_bytes: in
         'bytes_done': 0, 'objects_done': 0, 'total_bytes': total_bytes, 'total_objects': total_objects,
         'errors': '[]', 'created_at': _now(), 'updated_at': _now(),
     }
-    with db.connect() as conn:
-        conn.execute('''INSERT INTO migrations(id,state,verify_status,source_bucket,source_prefix,
-            source_endpoint,source_region,dest_bucket,dest_prefix,bytes_done,objects_done,
-            total_bytes,total_objects,errors,created_at,updated_at)
-            VALUES (:id,:state,:verify_status,:source_bucket,:source_prefix,:source_endpoint,
-            :source_region,:dest_bucket,:dest_prefix,:bytes_done,:objects_done,:total_bytes,
-            :total_objects,:errors,:created_at,:updated_at)''', job)
+    try:
+        with db.connect() as conn:
+            conn.execute('''INSERT INTO migrations(id,state,verify_status,source_bucket,source_prefix,
+                source_endpoint,source_region,dest_bucket,dest_prefix,bytes_done,objects_done,
+                total_bytes,total_objects,errors,created_at,updated_at)
+                VALUES (:id,:state,:verify_status,:source_bucket,:source_prefix,:source_endpoint,
+                :source_region,:dest_bucket,:dest_prefix,:bytes_done,:objects_done,:total_bytes,
+                :total_objects,:errors,:created_at,:updated_at)''', job)
+    except sqlite3.IntegrityError:
+        raise HTTPException(409, 'A migration is already running. Only one migration at a time is supported; '
+                                 'cancel or wait for it first.') from None
     out = dict(job)
     out['errors'] = []
     return out
+
+
+def create_job_if_no_active(source: dict, dest: dict) -> dict | None:
+    """Atomically check for an active job and insert the queued row (or return None)."""
+    with _slot_lock:
+        if active_job():
+            return None
+        return create_job(source, dest)
+
+
+def delete_job(job_id: str) -> None:
+    init_migrations()
+    with db.connect() as conn:
+        conn.execute('DELETE FROM migrations WHERE id=?', (job_id,))
 
 
 def update_job(job_id: str, **fields) -> None:
@@ -101,7 +159,7 @@ def list_jobs(limit: int = 50) -> list[dict]:
 
 
 def active_job() -> dict | None:
-    return next((j for j in list_jobs(20) if j['state'] in ('queued', 'running', 'verifying')), None)
+    return next((j for j in list_jobs(20) if j['state'] in ACTIVE_STATES), None)
 
 
 # --- SSRF guard -------------------------------------------------------------
@@ -153,6 +211,7 @@ def make_source_client(source: dict):
 
 
 def estimate(source: dict) -> dict:
+    validate_prefix(source.get('prefix', ''), 'Source')
     client = make_source_client(source)
     count, total, scanned = 0, 0, 0
     token = None
@@ -253,6 +312,11 @@ def _collect_errors(line: str, errors: list[str]) -> None:
 def run_job(job_id: str, source: dict, dest: dict) -> None:
     """Run copy then `rclone check --one-way`. Credentials live only in `env` here."""
     from app.db import audit
+    with _lock:
+        if job_id in _cancelled:
+            update_job(job_id, state='cancelled')
+            _cancelled.discard(job_id)
+            return
     rclone = rclone_path()
     if not rclone:
         update_job(job_id, state='failed', errors=['rclone is not available'])
@@ -262,11 +326,18 @@ def run_job(job_id: str, source: dict, dest: dict) -> None:
     env = build_env(source)
     errors: list[str] = []
     try:
-        update_job(job_id, state='running')
-        proc = subprocess.Popen(  # fixed argv, credentials via env only
-            [rclone, 'copy', src, dst, '--use-json-log', '--stats=1s', '--stats-one-line'],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+        # Launch and registration are one locked step: cancel_job either sets the
+        # flag before this (and the check above/below stops the launch) or finds
+        # the registered process afterwards and terminates it.
         with _lock:
+            if job_id in _cancelled:
+                update_job(job_id, state='cancelled')
+                return
+            update_job(job_id, state='running')
+            proc = subprocess.Popen(  # fixed argv, credentials via env only
+                [rclone, 'copy', src, dst, '--use-json-log', '--stats=1s', '--stats-one-line',
+                 '--stats-log-level', 'NOTICE'],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
             _procs[job_id] = proc
         assert proc.stderr is not None
         for line in proc.stderr:
@@ -336,22 +407,27 @@ def _existing_total(job_id: str, field: str) -> int:
 
 
 def cancel_job(job_id: str) -> bool:
+    # Held under _lock throughout so run_job cannot launch between the process
+    # lookup and setting the flag / cancelled state.
     with _lock:
         proc = _procs.get(job_id)
         if proc:
             _cancelled.add(job_id)
             proc.terminate()
             return True
-    job = get_job(job_id)
-    if job and job['state'] in ('queued', 'running', 'verifying'):
-        _cancelled.add(job_id)
-        update_job(job_id, state='cancelled')
-        return True
-    return False
+        job = get_job(job_id)
+        if job and job['state'] in ACTIVE_STATES:
+            _cancelled.add(job_id)
+            update_job(job_id, state='cancelled')
+            return True
+        return False
 
 
-def start_job(source: dict, dest: dict) -> dict:
-    job = create_job(source, dest)
+def launch_job(job: dict, source: dict, dest: dict) -> dict:
     thread = threading.Thread(target=run_job, args=(job['id'], dict(source), dict(dest)), daemon=True)
     thread.start()
     return job
+
+
+def start_job(source: dict, dest: dict) -> dict:
+    return launch_job(create_job(source, dest), source, dest)

@@ -5,9 +5,9 @@ WORKDIR /app
 RUN apt-get update && apt-get upgrade -y --no-install-recommends && rm -rf /var/lib/apt/lists/*
 RUN useradd -r -u 10001 appuser && mkdir -p /app/state && chown -R appuser:appuser /app
 # rclone for Cloud Connect (docs/CLOUD_CONNECT.md): pinned exact version, SHA-256 verified
-# against SHA256SUMS published at https://downloads.rclone.org/v1.68.2/SHA256SUMS
-ARG RCLONE_VERSION=1.68.2
-ARG RCLONE_SHA256=0e6fa18051e67fc600d803a2dcb10ddedb092247fc6eee61be97f64ec080a13c
+# against SHA256SUMS published at https://downloads.rclone.org/v1.76.0/SHA256SUMS
+ARG RCLONE_VERSION=1.76.0
+ARG RCLONE_SHA256=b00f00b3266c3764413afe599d3ec316f6f43b3e0ea8a0bc1d186d2133e46df7
 RUN apt-get update && apt-get install -y --no-install-recommends curl unzip ca-certificates && \
     curl -fsSL -o /tmp/rclone.zip "https://downloads.rclone.org/v${RCLONE_VERSION}/rclone-v${RCLONE_VERSION}-linux-amd64.zip" && \
     echo "${RCLONE_SHA256}  /tmp/rclone.zip" | sha256sum -c - && \
