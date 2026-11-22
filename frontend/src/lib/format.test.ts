@@ -1,5 +1,6 @@
+import { execFileSync } from 'node:child_process';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { activityFilterQuery, activityFiltersFromHash, activityRowLabel, activityTitle, auditListQuery, bucketNameError, bytes, folderOf, gatewayKidDisplay, isImage, parseGatewayDetail, plural, shortName, skipToMainContent, when } from './format';
+import { activityFilterQuery, activityFiltersFromHash, activityRowLabel, activityTitle, auditListQuery, bucketNameError, bytes, credentialEnvText, credentialMcpJson, credentialSigningUnavailable, credentialStatus, folderOf, gatewayKidDisplay, isImage, msUntilCredentialExpiry, parseGatewayDetail, parseIssueDetail, plural, prefixError, shortName, skipToMainContent, ttlPresetEnabled, when } from './format';
 import { pageFromHash } from './routes';
 
 afterEach(() => vi.unstubAllGlobals());
@@ -174,4 +175,70 @@ describe('bucketNameError', () => {
     ['de..mo', /dots/],
     ['192.168.0.1', /IP address/],
   ])('rejects %s', (name, msg) => expect(bucketNameError(name)).toMatch(msg));
+});
+
+describe('credential helpers', () => {
+  it('requires a prefix that ends with / and rejects unsafe keys', () => {
+    expect(prefixError('')).toMatch(/ends with \//);
+    expect(prefixError('run-42')).toBe('Prefix must end with /.');
+    expect(prefixError('run-42/')).toBe('');
+    expect(prefixError('/abs/')).toMatch(/leading/);
+    expect(prefixError('../x/')).toMatch(/\.\./);
+  });
+  it('keeps 24 h visible but disabled past the 1 hour server max', () => {
+    expect(ttlPresetEnabled(900)).toBe(true);
+    expect(ttlPresetEnabled(3600)).toBe(true);
+    expect(ttlPresetEnabled(86400)).toBe(false);
+  });
+  it('parses an issue detail, including a label with spaces', () => {
+    expect(parseIssueDetail('kid=STZABC mode=rw exp=1700000000 label=night run')).toEqual({
+      kid: 'STZABC', mode: 'rw', exp: 1700000000, label: 'night run',
+    });
+    expect(parseIssueDetail('kid=STZABC mode=ro exp=10')).toMatchObject({label: ''});
+    expect(parseIssueDetail('mode=ro exp=10')).toBeNull();
+    expect(parseIssueDetail(null)).toBeNull();
+  });
+  it('treats exp as the active/expired boundary', () => {
+    expect(credentialStatus(100, 100)).toBe('active');
+    expect(credentialStatus(100, 101)).toBe('expired');
+  });
+  it('wakes one millisecond after the soonest still-active expiry', () => {
+    expect(msUntilCredentialExpiry([100], 100_000)).toBe(1);
+    expect(msUntilCredentialExpiry([101, 200], 100_000)).toBe(1001);
+    expect(msUntilCredentialExpiry([99], 100_000)).toBeNull();
+    expect(msUntilCredentialExpiry([1e15], 0)).toBe(2_147_483_647);
+  });
+  it('shows the signing-key message only for that 503 detail', () => {
+    expect(credentialSigningUnavailable(503, 'Agent credentials are not configured (set CRED_SIGNING_KEY, 32+ characters)')).toBe(true);
+    expect(credentialSigningUnavailable(503, 'Storage service unavailable or request failed')).toBe(false);
+    expect(credentialSigningUnavailable(500, 'Agent credentials are not configured')).toBe(false);
+  });
+  it('builds env and MCP snippets that name every storzo-mcp variable', () => {
+    const env = {
+      endpoint: 'http://localhost:8333', accessKeyId: 'STZ1', secretAccessKey: 'sec',
+      sessionToken: 'tok', bucket: 'demo', prefix: 'run/', mode: 'ro' as const,
+    };
+    const text = credentialEnvText(env);
+    expect(text).toContain("STORZO_SECRET_ACCESS_KEY='sec'");
+    expect(text).toContain("STORZO_MODE='ro'");
+    const json = credentialMcpJson(env);
+    expect(JSON.parse(json).mcpServers.storzo.env.STORZO_SESSION_TOKEN).toBe('tok');
+    expect(JSON.parse(json).mcpServers.storzo.env.STORZO_PREFIX).toBe('run/');
+    expect(json).toContain('"command": "storzo-mcp"');
+  });
+  it('single-quotes env values so a shell does not split or expand them', () => {
+    const sample = {
+      endpoint: 'http://localhost:8333', accessKeyId: 'STZ1', secretAccessKey: 'sec',
+      sessionToken: 'tok', bucket: 'demo', mode: 'ro' as const,
+    };
+    expect(credentialEnvText({...sample, prefix: 'night run/'})).toContain("STORZO_PREFIX='night run/'");
+    expect(credentialEnvText({...sample, prefix: "o'clock/"})).toContain(`STORZO_PREFIX='o'\\''clock/'`);
+    expect(credentialEnvText({...sample, prefix: '$(x)/'})).toContain("STORZO_PREFIX='$(x)/'");
+    expect(credentialEnvText({...sample, prefix: '`tick`/'})).toContain("STORZO_PREFIX='`tick`/'");
+    for (const prefix of ['night run/', "o'clock/", '$(x)/', '`tick`/']) {
+      const block = credentialEnvText({...sample, prefix});
+      const got = execFileSync('bash', ['-c', `${block}\nprintf %s "$STORZO_PREFIX"`], {encoding: 'utf8'});
+      expect(got).toBe(prefix);
+    }
+  });
 });

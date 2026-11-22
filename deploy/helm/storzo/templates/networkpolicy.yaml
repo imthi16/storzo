@@ -1,0 +1,115 @@
+{{ if .Values.networkPolicy.enabled }}
+# Default-deny ingress for the backend and the gateway. Pods not listed below cannot open those ports.
+# /api/internal (audit ingest and the revocation feed) must stay unreachable from outside the cluster.
+# This chart does not give /api/internal its own ingress: only the frontend and gateway pods may
+# reach backend:8000, and the frontend nginx returns 404 for /api/internal/. Do not publish the
+# backend Service, and do not proxy /api/internal/ through the frontend.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "storzo.fullname" . }}-backend
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: backend
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: backend
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: {{ .Release.Name }}
+              app.kubernetes.io/component: frontend
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: {{ .Release.Name }}
+              app.kubernetes.io/component: gateway
+      ports:
+        - {protocol: TCP, port: 8000}
+  egress:
+    - to:
+        {{ if .Values.networkPolicy.storage.namespace }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.storage.namespace | quote }}
+          podSelector:
+            {{ toYaml .Values.networkPolicy.storage.podSelector | nindent 12 }}
+        {{ else }}
+        - podSelector:
+            {{ toYaml .Values.networkPolicy.storage.podSelector | nindent 12 }}
+        {{ end }}
+      ports:
+        - {protocol: TCP, port: {{ .Values.networkPolicy.storage.port }}}
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.dns.namespace | quote }}
+          podSelector:
+            matchLabels:
+              {{ toYaml .Values.networkPolicy.dns.matchLabels | nindent 14 }}
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "storzo.fullname" . }}-gateway
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: gateway
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: gateway
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        {{ if .Values.networkPolicy.clients.namespace }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.clients.namespace | quote }}
+          podSelector:
+            {{ toYaml .Values.networkPolicy.clients.podSelector | nindent 12 }}
+        {{ else }}
+        - podSelector:
+            {{ toYaml .Values.networkPolicy.clients.podSelector | nindent 12 }}
+        {{ end }}
+      ports:
+        - {protocol: TCP, port: 8333}
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: {{ .Release.Name }}
+              app.kubernetes.io/component: backend
+      ports:
+        - {protocol: TCP, port: 8000}
+    - to:
+        {{ if .Values.networkPolicy.storage.namespace }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.storage.namespace | quote }}
+          podSelector:
+            {{ toYaml .Values.networkPolicy.storage.podSelector | nindent 12 }}
+        {{ else }}
+        - podSelector:
+            {{ toYaml .Values.networkPolicy.storage.podSelector | nindent 12 }}
+        {{ end }}
+      ports:
+        - {protocol: TCP, port: {{ .Values.networkPolicy.storage.port }}}
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.dns.namespace | quote }}
+          podSelector:
+            matchLabels:
+              {{ toYaml .Values.networkPolicy.dns.matchLabels | nindent 14 }}
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+{{ end }}

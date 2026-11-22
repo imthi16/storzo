@@ -39,3 +39,28 @@ resources:
   gateway:
     requests: {cpu: 50m, memory: 64Mi}
     limits: {cpu: 500m, memory: 256Mi}
+# Off by default so existing installs keep their current traffic.
+# When enabled, backend and gateway ingress are default-deny. /api/internal is only
+# reachable from the gateway pod (the frontend nginx returns 404 for that path). Do not
+# publish the backend Service. Set storage labels to the SeaweedFS S3 pods so backend
+# and gateway may egress there, and clients to the workloads that may open gateway:8333.
+# Those labels are an egress destination only: this policy does not select SeaweedFS
+# pods and does not isolate storage ingress. Whoever deploys SeaweedFS must policy
+# that ingress separately. An empty clients.namespace means this release's namespace;
+# podSelector {} matches every pod there.
+networkPolicy:
+  enabled: false
+  clients:
+    namespace: ""
+    podSelector: {}
+  storage:
+    port: 8333
+    namespace: ""
+    podSelector:
+      matchLabels:
+        app.kubernetes.io/name: seaweedfs
+        app.kubernetes.io/component: s3
+  dns:
+    namespace: kube-system
+    matchLabels:
+      k8s-app: kube-dns

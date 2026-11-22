@@ -1,5 +1,5 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { Activity, ArrowDown, ArrowDownToLine, ArrowUp, ChevronRight, CloudDownload, Copy, Database, LayoutDashboard, LogOut, Menu, RefreshCw, Settings, X } from 'lucide-react';
+import { Activity, ArrowDown, ArrowDownToLine, ArrowUp, ChevronRight, CloudDownload, Copy, Database, KeyRound, LayoutDashboard, LogOut, Menu, RefreshCw, Settings, X } from 'lucide-react';
 import type { Session, Bucket, Obj, Listing, Stats, SortKey, Preview, Audit, Page, ActivityPage, UploadItem, DialogState } from './types';
 import { plural, enc, bytes, isImage, shortName, folderOf, when, bucketNameError, activityFilterQuery, activityFiltersFromHash, auditListQuery, skipToMainContent, type AuditDecision, type AuditSource } from './lib/format';
 import { pageFromHash, hashFor } from './lib/routes';
@@ -13,6 +13,7 @@ import { BucketsPage } from './pages/BucketsPage';
 import { ActivityListPage } from './pages/ActivityListPage';
 import { ActivityEventPage } from './pages/ActivityEventPage';
 import { SettingsPage } from './pages/SettingsPage';
+import { CredentialsPage } from './pages/CredentialsPage';
 import { MigrationsPage } from './pages/MigrationsPage';
 
 export function App() {
@@ -80,6 +81,7 @@ export function App() {
   });
   const [checked, setChecked] = useState<string[]>([]);
   const [now, setNow] = useState(() => Date.now());
+  const [credReload, setCredReload] = useState(0);
   const lastRefresh = useRef(0);
 
   const csrf = session?.csrf;
@@ -144,6 +146,7 @@ export function App() {
       if (page === 'dashboard') await Promise.all([reloadStats(), reloadBuckets(), reloadAudit()]);
       if (page === 'buckets') { await reloadBuckets(); if (selected) await reloadObjects(); }
       if (page === 'activity') await reloadActivity();
+      if (page === 'credentials') setCredReload(n => n + 1);
       const res = await fetch('/api/health/ready'); setReady(res.ok ? 'online' : 'offline');
     } catch(e) { fail(e); } finally { exitBusy(); }
   };
@@ -359,18 +362,20 @@ export function App() {
         <button className={page==='dashboard'?'nav active':'nav'} onClick={()=>nav('dashboard')}><LayoutDashboard size={19}/>Overview</button>
         <button className={page==='buckets'?'nav active':'nav'} onClick={()=>nav('buckets')}><Database size={19}/>Buckets & objects</button>
         <button className={page==='activity'||page==='activity-detail'?'nav active':'nav'} onClick={()=>nav('activity')}><Activity size={19}/>Activity log</button>
+        <button className={page==='credentials'?'nav active':'nav'} onClick={()=>nav('credentials')}><KeyRound size={19}/>Credentials</button>
         <button className={page==='settings'?'nav active':'nav'} onClick={()=>nav('settings')}><Settings size={19}/>Settings</button>
         <button className={page==='migrations'?'nav active':'nav'} onClick={()=>nav('migrations')}><CloudDownload size={19}/>Cloud connect</button>
       </nav>
       <div className="side-bottom"><div className="infra-tag"><span className={`pulse ${ready}`}/>{ready==='online'?'Storage connected':ready==='offline'?'Storage unavailable':'Checking storage'}</div><div className="side-user"><div className="avatar">{session.username.charAt(0).toUpperCase()}</div><div><strong>{session.username}</strong><small>Administrator</small></div><button onClick={logout} title="Sign out" aria-label="Sign out" className="icon-btn"><LogOut size={17}/></button></div></div>
     </aside>
     <main id="main-content" tabIndex={-1} className="content">
-      <header className="topbar"><button className="mobile-toggle icon-btn" aria-label="Toggle navigation menu" onClick={()=>setMenuOpen(!menuOpen)}><Menu/></button><nav className="breadcrumbs" aria-label="Breadcrumb"><button className="crumb crumb-root" onClick={()=>nav('dashboard')}>Workspace</button><ChevronRight size={15} className="crumb-root"/>{page==='activity-detail'?<><button className="crumb" onClick={()=>nav('activity')}>Activity log</button><ChevronRight size={15}/><strong aria-current="page">Event #{activityId}</strong></>:<strong aria-current="page">{page==='dashboard'?'Overview':page==='buckets'?'Buckets & objects':page==='activity'?'Activity log':page==='migrations'?'Cloud connect':'Settings'}</strong>}</nav><div className="top-actions"><button className="secondary compact" onClick={refresh} disabled={busy}><RefreshCw size={16} className={busy?'spin':''}/> Refresh</button></div></header>
+      <header className="topbar"><button className="mobile-toggle icon-btn" aria-label="Toggle navigation menu" onClick={()=>setMenuOpen(!menuOpen)}><Menu/></button><nav className="breadcrumbs" aria-label="Breadcrumb"><button className="crumb crumb-root" onClick={()=>nav('dashboard')}>Workspace</button><ChevronRight size={15} className="crumb-root"/>{page==='activity-detail'?<><button className="crumb" onClick={()=>nav('activity')}>Activity log</button><ChevronRight size={15}/><strong aria-current="page">Event #{activityId}</strong></>:<strong aria-current="page">{page==='dashboard'?'Overview':page==='buckets'?'Buckets & objects':page==='activity'?'Activity log':page==='migrations'?'Cloud connect':page==='credentials'?'Credentials':'Settings'}</strong>}</nav><div className="top-actions"><button className="secondary compact" onClick={refresh} disabled={busy}><RefreshCw size={16} className={busy?'spin':''}/> Refresh</button></div></header>
       <div className="page-body">
       {page==='dashboard' && <OverviewPage stats={stats} updatedAgo={updatedAgo} uploadDays={uploadDays} ready={ready} barPage={barPage} setBarPage={setBarPage} pageSize={pageSize} changePageSize={changePageSize} openBucket={openBucket} openPreview={openPreview} nav={nav}/>}
       {page==='buckets' && <BucketsPage createBucket={createBucket} buckets={buckets} bucketFilter={bucketFilter} setBucketFilter={setBucketFilter} selected={selected} openBucket={openBucket} onDragEnter={onDragEnter} onDragOverPanel={onDragOverPanel} onDragLeave={onDragLeave} onDropFiles={onDropFiles} dragging={dragging} prefix={prefix} setPrefix={setPrefix} fileInput={fileInput} upload={upload} deleteBucket={deleteBucket} busy={busy} search={search} setSearch={setSearch} typeFilter={typeFilter} setTypeFilter={setTypeFilter} view={view} setViewPersist={setViewPersist} checked={checked} setChecked={setChecked} checkedBytes={checkedBytes} deleteSelected={deleteSelected} toggleCheck={toggleCheck} uploads={uploads} setUploads={setUploads} retryUpload={retryUpload} failedCount={failedCount} retryFailed={retryFailed} listing={listing} list={list} filtered={filtered} openPreview={openPreview} linkFile={linkFile} deleteFile={deleteFile} sortLabel={sortLabel} clickSort={clickSort} sortArrow={sortArrow} pageSize={pageSize} changePageSize={changePageSize} pager={pager} goPrevObjects={goPrevObjects} navigating={navigating} goNextObjects={goNextObjects}/>}
       {page==='activity' && <ActivityListPage activity={activity} pageSize={pageSize} changePageSize={changePageSize} setActivityOffset={setActivityOffset} openActivity={openActivity} reloadActivity={reloadActivity} fail={fail} source={activitySource} decision={activityDecision} setSource={setActivitySourceFilter} setDecision={setActivityDecisionFilter}/>}
       {page==='activity-detail' && <ActivityEventPage entry={entry} entryError={entryError} activityId={activityId} nav={nav} openLocation={openLocation}/>}
+      {page==='credentials' && <CredentialsPage csrf={session.csrf} askConfirm={askConfirm} show={show} fail={fail} reloadNonce={credReload}/>}
       {page==='settings' && <SettingsPage ready={ready}/>}
       {page==='migrations' && <MigrationsPage csrf={csrf} fail={fail} show={show}/>}
       </div>
