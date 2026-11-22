@@ -31,10 +31,12 @@ if [ "$cmd" = "copy" ]; then
     exit 1
   fi
   if [ "$mode" = "slow" ]; then sleep 3; fi
+  if [ "$mode" = "quick" ]; then exit 0; fi
   printf '%s\n' '{"level":"notice","msg":"stats","stats":{"bytes":5,"totalBytes":10,"transfers":1,"totalTransfers":2,"errors":0}}' >&2
   printf '%s\n' '{"level":"notice","msg":"stats","stats":{"bytes":10,"totalBytes":10,"transfers":2,"totalTransfers":2,"errors":0}}' >&2
   exit 0
 fi
+if [ "$cmd" = "size" ]; then printf '%s\n' '{"count":3,"bytes":7}'; exit 0; fi
 if [ "$cmd" = "check" ]; then
   if [ "$mode" = "mismatch" ]; then
     printf '%s\n' '{"level":"error","msg":"1 files differ"}' >&2
@@ -246,3 +248,17 @@ MODE_FILE = None
 def set_mode(mode):
     # A file, not an env var: build_env deliberately drops non-allowlisted variables.
     MODE_FILE.write_text(mode)
+
+
+def test_fast_copy_without_progress_still_reports_counts(monkeypatch, tmp_path):
+    # Found live: a copy that finishes inside one stats interval emitted no progress and the job showed 0 of 0.
+    c, _ = setup(monkeypatch, tmp_path)
+    try:
+        csrf = login(c)
+        set_mode('quick')
+        r = c.post('/api/migrations', json=body(), headers={'X-CSRF-Token': csrf})
+        job = wait_state(c, r.json()['id'], {'done'})
+        assert job['verify_status'] == 'verified'
+        assert job['objects_done'] == 3 and job['bytes_done'] == 7 and job['total_objects'] == 3
+    finally:
+        c.__exit__(None, None, None)

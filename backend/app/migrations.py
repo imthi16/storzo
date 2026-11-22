@@ -301,7 +301,19 @@ def run_job(job_id: str, source: dict, dest: dict) -> None:
         verify = 'verified' if check.returncode == 0 else 'mismatched'
         for line in (check.stderr or '').splitlines():
             _collect_errors(line, errors)
-        update_job(job_id, state='done', verify_status=verify, errors=errors[:MAX_ERRORS])
+        counts: dict = {}
+        if verify == 'verified' and not (get_job(job_id) or {}).get('objects_done'):
+            # A copy that finishes inside one stats interval never reports progress; count the source instead
+            # (the one-way check just proved every source object is at the destination). Written in the same
+            # update as state='done' so a reader never sees "done" with 0 of 0.
+            size = subprocess.run([rclone, 'size', src, '--json'], capture_output=True, text=True, env=env, timeout=600)
+            try:
+                counted = json.loads(size.stdout)
+                counts = {'objects_done': int(counted['count']), 'bytes_done': int(counted['bytes']),
+                          'total_objects': int(counted['count']), 'total_bytes': int(counted['bytes'])}
+            except (ValueError, KeyError, TypeError):
+                pass
+        update_job(job_id, state='done', verify_status=verify, errors=errors[:MAX_ERRORS], **counts)
         job = get_job(job_id) or {}
         audit('migration.finish', dest['bucket'], dest.get('prefix') or None,
               f"id={job_id} state=done verify={verify} objects={job.get('objects_done', 0)} bytes={job.get('bytes_done', 0)}")
