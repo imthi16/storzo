@@ -29,7 +29,11 @@ type noop struct{}
 
 func (noop) Emit(Event) {}
 
+const DefaultRevocationPollInterval = 10 * time.Second
+
 type Config struct {
+	Revocations                                                                           *audit.Revocations
+	RevocationPollInterval                                                                time.Duration
 	Listen, StorageEndpoint, StorageAccessKey, StorageSecretKey, CredSigningKey, AuditURL string
 	MaxHashedBodyBytes                                                                    int64
 	RateLimit                                                                             float64 // requests per second per verified scoped kid; zero disables
@@ -39,7 +43,7 @@ type Config struct {
 
 // ConfigFromEnv validates configuration without including secret values in errors.
 func ConfigFromEnv() (Config, error) {
-	c := Config{RateLimit: defaultRateLimit, RateBurst: defaultRateBurst, AuditURL: os.Getenv("AUDIT_URL"), Listen: os.Getenv("GATEWAY_LISTEN"), StorageEndpoint: os.Getenv("STORAGE_ENDPOINT"), StorageAccessKey: os.Getenv("STORAGE_ACCESS_KEY"), StorageSecretKey: os.Getenv("STORAGE_SECRET_KEY"), CredSigningKey: os.Getenv("CRED_SIGNING_KEY")}
+	c := Config{RevocationPollInterval: DefaultRevocationPollInterval, RateLimit: defaultRateLimit, RateBurst: defaultRateBurst, AuditURL: os.Getenv("AUDIT_URL"), Listen: os.Getenv("GATEWAY_LISTEN"), StorageEndpoint: os.Getenv("STORAGE_ENDPOINT"), StorageAccessKey: os.Getenv("STORAGE_ACCESS_KEY"), StorageSecretKey: os.Getenv("STORAGE_SECRET_KEY"), CredSigningKey: os.Getenv("CRED_SIGNING_KEY")}
 	var missing []string
 	for _, item := range []struct{ name, value string }{{"STORAGE_ENDPOINT", c.StorageEndpoint}, {"STORAGE_ACCESS_KEY", c.StorageAccessKey}, {"STORAGE_SECRET_KEY", c.StorageSecretKey}, {"CRED_SIGNING_KEY", c.CredSigningKey}, {"AUDIT_URL", c.AuditURL}} {
 		if item.value == "" {
@@ -78,6 +82,13 @@ func ConfigFromEnv() (Config, error) {
 		}
 		c.RateBurst = value
 	}
+	if raw := os.Getenv("GATEWAY_REVOCATION_POLL_INTERVAL"); raw != "" {
+		interval, err := time.ParseDuration(raw)
+		if err != nil || interval <= 0 {
+			return c, errors.New("invalid GATEWAY_REVOCATION_POLL_INTERVAL: expected a positive duration")
+		}
+		c.RevocationPollInterval = interval
+	}
 	c.MaxHashedBodyBytes = mb * (1 << 20)
 	return c, validate(c)
 }
@@ -109,11 +120,12 @@ func validate(c Config) error {
 }
 
 type Handler struct {
-	verifier *verify.Verifier
-	upstream *httputil.ReverseProxy
-	auditor  Auditor
-	maxBody  int64
-	limiter  *rateLimiter
+	verifier    *verify.Verifier
+	upstream    *httputil.ReverseProxy
+	auditor     Auditor
+	maxBody     int64
+	limiter     *rateLimiter
+	revocations *audit.Revocations
 }
 
 func New(c Config, auditor Auditor) (*Handler, error) {
@@ -171,7 +183,7 @@ func New(c Config, auditor Auditor) (*Handler, error) {
 		ErrorLog:      log.New(io.Discard, "", 0),
 		FlushInterval: -1,
 	}
-	return &Handler{verifier: v, upstream: rp, auditor: auditor, maxBody: c.MaxHashedBodyBytes, limiter: newRateLimiter(c.RateLimit, c.RateBurst, c.RateClock)}, nil
+	return &Handler{revocations: c.Revocations, verifier: v, upstream: rp, auditor: auditor, maxBody: c.MaxHashedBodyBytes, limiter: newRateLimiter(c.RateLimit, c.RateBurst, c.RateClock)}, nil
 }
 
 type signingTransport struct {
@@ -229,6 +241,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	event.Kid = claims.Kid
+	if !claims.Master && h.revocations != nil && h.revocations.Contains(claims.Kid) {
+		(&verify.Error{Status: 403, Code: "AccessDenied", Message: "Credential revoked."}).Write(rw)
+		return
+	}
 	// Only a successfully verified scoped identity may spend its bucket.
 	if !claims.Master && !h.limiter.allow(claims.Kid) {
 		rw.Header().Set("Retry-After", "1")

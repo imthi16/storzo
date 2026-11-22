@@ -88,6 +88,13 @@ func TestShutdownDrainsBeforeAuditClose(t *testing.T) {
 		if got := r.Header.Get("X-Storzo-Signature"); got != hex.EncodeToString(mac.Sum(nil)) {
 			t.Error("audit signature does not use timestamp.body and CRED_SIGNING_KEY")
 		}
+		if r.Method == http.MethodGet {
+			if r.URL.RequestURI() != "/revoked?since=0" {
+				t.Error("unexpected startup revocation URL")
+			}
+			_, _ = io.WriteString(w, `{"kids":[],"now":1}`)
+			return
+		}
 		var batch struct {
 			Events []audit.Event
 		}

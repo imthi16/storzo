@@ -38,3 +38,10 @@ def issue_credential(body: CredentialRequest, _sess: dict = Depends(require_writ
           f"kid={cred['access_key_id']} mode={body.mode} exp={cred['expires_at']}" + (f' label={body.label}' if body.label else ''))
     return {'access_key_id': cred['access_key_id'], 'secret_access_key': cred['secret_access_key'],
             'session_token': cred['session_token'], 'expires_at': expires, 'endpoint': config.S3_PUBLIC_ENDPOINT}
+
+
+@router.post('/{kid}/revoke')
+def revoke_credential(kid: str, _sess: dict = Depends(require_write)):
+    if not credentials.revoke(kid):
+        raise HTTPException(404, 'Credential not found')
+    return {'kid': kid, 'revoked': True}

@@ -326,10 +326,8 @@ func (e *Emitter) post(body []byte) error {
 	if err != nil {
 		return err
 	}
-	ts := strconv.FormatInt(time.Now().Unix(), 10)
 	req.Header.Set("Content-Type", contentTypeJSON)
-	req.Header.Set(headerTimestamp, ts)
-	req.Header.Set(headerSignature, signature(e.key, ts, body))
+	signRequest(req, e.key, body)
 	resp, err := e.client.Do(req)
 	if err != nil {
 		return err
