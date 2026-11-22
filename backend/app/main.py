@@ -6,12 +6,13 @@ The S3 data plane is reached directly by S3 SDKs.
 from fastapi import FastAPI
 
 from app import config
+from app import migrations as migration_jobs
 from app.db import init_db
-from app.routers import audit, auth, buckets, credentials, dashboard, health, internal, objects
+from app.routers import audit, auth, buckets, credentials, dashboard, health, internal, migrations, objects
 from app.security import signed_serializer
 
 app = FastAPI(title=config.APP_NAME + ' Management API', version='0.1.0', docs_url=None, redoc_url=None)
-for module in (health, auth, buckets, objects, audit, dashboard, credentials, internal):
+for module in (health, auth, buckets, objects, audit, dashboard, credentials, internal, migrations):
     app.include_router(module.router)
 
 
@@ -24,3 +25,5 @@ def startup():
     if not config.S3_ACCESS_KEY or not config.S3_SECRET_KEY:
         raise RuntimeError('S3 credentials must be set')
     init_db()
+    migration_jobs.init_migrations()
+    migration_jobs.fail_interrupted_jobs()

@@ -9,7 +9,7 @@ export type ObjRef = {bucket: string; key: string; size: number; modified: strin
 export type SortKey = 'name' | 'size' | 'modified';
 export type Preview = {obj: Obj; bucket: string};
 export type Audit = {id: number; ts: string; actor: string; action: string; bucket: string | null; object_key: string | null; detail: string | null};
-export type Page = 'dashboard' | 'buckets' | 'activity' | 'activity-detail' | 'settings' | 'credentials';
+export type Page = 'dashboard' | 'buckets' | 'activity' | 'activity-detail' | 'settings' | 'migrations' | 'credentials';
 export type ActivityPage = {items: Audit[]; total: number; limit: number; offset: number};
 export type UploadItem = {id: number; name: string; size: number; status: 'queued' | 'uploading' | 'done' | 'error'; progress: number; error: string; file: File; bucket: string; key: string; retry: boolean};
 export type DialogState = {submit?: (v: string) => Promise<string>; validate?: (v: string) => string; title: string; message?: string; label?: string; confirmLabel: string; danger?: boolean; text: boolean; resolve: (v: string | boolean | null) => void};
