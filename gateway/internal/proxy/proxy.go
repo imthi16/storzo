@@ -97,6 +97,10 @@ func ConfigFromEnv() (Config, error) {
 		}
 		c.RevocationMaxStale = bound
 	}
+	// A bound inside one healthy poll cycle would 503 scoped traffic with the backend up.
+	if c.RevocationMaxStale <= c.RevocationPollInterval+audit.RevocationPollTimeout {
+		return c, errors.New("invalid GATEWAY_REVOCATION_MAX_STALE: must exceed the poll interval plus the 3s poll timeout")
+	}
 	c.MaxHashedBodyBytes = mb * (1 << 20)
 	return c, validate(c)
 }

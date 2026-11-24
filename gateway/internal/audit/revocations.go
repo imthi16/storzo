@@ -18,6 +18,9 @@ import (
 // snapshot before scoped requests fail closed.
 const DefaultRevocationMaxStale = 60 * time.Second
 
+// RevocationPollTimeout caps one poll; a healthy refresh can land this late.
+const RevocationPollTimeout = 3 * time.Second
+
 // Revocations holds the latest successful snapshot of all active revoked kids.
 type Revocations struct {
 	url         string
@@ -42,7 +45,7 @@ func NewRevocations(auditURL, key string, maxStale time.Duration) (*Revocations,
 	return &Revocations{
 		url: u.String(), key: []byte(key), maxStale: maxStale,
 		client: http.Client{
-			Timeout:       3 * time.Second,
+			Timeout:       RevocationPollTimeout,
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		},
 	}, nil

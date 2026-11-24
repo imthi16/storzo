@@ -314,7 +314,7 @@ func TestConfigFromEnv(t *testing.T) {
 		}
 	}
 	t.Setenv("GATEWAY_MAX_HASHED_BODY_MB", "1")
-	for _, raw := range []string{"0", "-1s", "bad"} {
+	for _, raw := range []string{"0", "-1s", "bad", "5s", "13s"} {
 		t.Setenv("GATEWAY_REVOCATION_MAX_STALE", raw)
 		if _, err := ConfigFromEnv(); err == nil {
 			t.Errorf("accepted max stale %s", raw)
