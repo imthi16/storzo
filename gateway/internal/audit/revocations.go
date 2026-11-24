@@ -26,7 +26,7 @@ type Revocations struct {
 	url         string
 	key         []byte
 	kids        atomic.Pointer[map[string]struct{}]
-	lastSuccess atomic.Int64 // unix nanoseconds of the last successful snapshot
+	lastSuccess atomic.Pointer[time.Time] // keeps the monotonic reading, so wall-clock steps cannot extend freshness
 	maxStale    time.Duration
 	client      http.Client
 }
@@ -65,7 +65,7 @@ func (r *Revocations) Contains(kid string) bool {
 // closed during a cold start with an unreachable backend.
 func (r *Revocations) Stale(now time.Time) bool {
 	last := r.lastSuccess.Load()
-	return last == 0 || now.Sub(time.Unix(0, last)) > r.maxStale
+	return last == nil || now.Sub(*last) > r.maxStale
 }
 
 // Refresh replaces the cache only after receiving a complete, valid snapshot.
@@ -119,7 +119,8 @@ func (r *Revocations) refresh(ctx context.Context) error {
 		kids[kid] = struct{}{}
 	}
 	r.kids.Store(&kids)
-	r.lastSuccess.Store(time.Now().UnixNano())
+	refreshed := time.Now()
+	r.lastSuccess.Store(&refreshed)
 	return nil
 }
 

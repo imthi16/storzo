@@ -314,7 +314,12 @@ func TestConfigFromEnv(t *testing.T) {
 		}
 	}
 	t.Setenv("GATEWAY_MAX_HASHED_BODY_MB", "1")
-	for _, raw := range []string{"0", "-1s", "bad", "5s", "13s"} {
+	t.Setenv("GATEWAY_REVOCATION_POLL_INTERVAL", "60s")
+	if c, err := ConfigFromEnv(); err != nil || c.RevocationMaxStale != 123*time.Second {
+		t.Errorf("long interval must raise the default bound: %+v err=%v", c, err)
+	}
+	t.Setenv("GATEWAY_REVOCATION_POLL_INTERVAL", "10s")
+	for _, raw := range []string{"0", "-1s", "bad", "5s", "13s", "22s"} {
 		t.Setenv("GATEWAY_REVOCATION_MAX_STALE", raw)
 		if _, err := ConfigFromEnv(); err == nil {
 			t.Errorf("accepted max stale %s", raw)

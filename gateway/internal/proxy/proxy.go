@@ -90,16 +90,19 @@ func ConfigFromEnv() (Config, error) {
 		}
 		c.RevocationPollInterval = interval
 	}
+	// One failed poll must not 503 scoped traffic: the bound has to span two intervals plus a poll timeout.
+	minStale := 2*c.RevocationPollInterval + audit.RevocationPollTimeout
 	if raw := os.Getenv("GATEWAY_REVOCATION_MAX_STALE"); raw != "" {
 		bound, err := time.ParseDuration(raw)
 		if err != nil || bound <= 0 {
 			return c, errors.New("invalid GATEWAY_REVOCATION_MAX_STALE: expected a positive duration")
 		}
+		if bound < minStale {
+			return c, errors.New("invalid GATEWAY_REVOCATION_MAX_STALE: must be at least twice the poll interval plus the 3s poll timeout")
+		}
 		c.RevocationMaxStale = bound
-	}
-	// A bound inside one healthy poll cycle would 503 scoped traffic with the backend up.
-	if c.RevocationMaxStale <= c.RevocationPollInterval+audit.RevocationPollTimeout {
-		return c, errors.New("invalid GATEWAY_REVOCATION_MAX_STALE: must exceed the poll interval plus the 3s poll timeout")
+	} else {
+		c.RevocationMaxStale = max(c.RevocationMaxStale, minStale) // a long custom interval raises the default instead of failing startup
 	}
 	c.MaxHashedBodyBytes = mb * (1 << 20)
 	return c, validate(c)
