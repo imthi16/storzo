@@ -41,3 +41,13 @@ values-private.yaml
 frontend/test-results/
 frontend/playwright-report/
 frontend/*.tsbuildinfo
+
+# Local tool output (never commit)
+.claude-flow/
+.swarm/
+.serena/
+.impeccable/
+.mcp.json
+agentdb.rvf*
+docs/.claude-flow/
+docs/.swarm/
