@@ -197,7 +197,7 @@ cd gateway && go build -o storzo-mcp ./cmd/storzo-mcp
 
 Limits to know before relying on it:
 
-- Revoke scoped keys with the admin API. A healthy gateway can take up to one polling interval (10 s by default) plus clock skew and request latency to observe a revoke. During a backend outage it keeps its last known list and continues serving. Rotating `CRED_SIGNING_KEY` and restarting the backend and gateway is the kill-all switch.
+- Revoke scoped keys with the admin API. A healthy gateway can take up to one polling interval (10 s by default) plus clock skew and request latency to observe a revoke. During a backend outage it keeps its last known list for up to `GATEWAY_REVOCATION_MAX_STALE` (default 60 s), then fails closed for scoped keys with 503 until polling recovers; master-key requests keep working. Rotating `CRED_SIGNING_KEY` and restarting the backend and gateway is the kill-all switch.
 - Scoped PUTs using signed, trailer-free `aws-chunked` framing are verified and decoded before forwarding, within the hashed-body size cap. Other chunked variants return 501. This path was tested against a fake upstream. SDK defaults, AWS CLI, HTTPS and load were not verified for this path.
 - Audit is best effort: a queue of 10,000 events, 4 attempts per batch, no disk spool. For gateway requests the `kid` is stored for every request whose signature the gateway verified, including requests denied by scope; it is empty only when authentication failed (wrong secret, bad or expired token, malformed request) and in events recorded before this was added, and the console then shows "not recorded".
 - The audit endpoint accepts a replay inside its 5-minute window.

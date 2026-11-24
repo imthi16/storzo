@@ -14,15 +14,21 @@ import (
 	"time"
 )
 
+// DefaultRevocationMaxStale bounds how long a failed poll may serve the last
+// snapshot before scoped requests fail closed.
+const DefaultRevocationMaxStale = 60 * time.Second
+
 // Revocations holds the latest successful snapshot of all active revoked kids.
 type Revocations struct {
-	url    string
-	key    []byte
-	kids   atomic.Pointer[map[string]struct{}]
-	client http.Client
+	url         string
+	key         []byte
+	kids        atomic.Pointer[map[string]struct{}]
+	lastSuccess atomic.Int64 // unix nanoseconds of the last successful snapshot
+	maxStale    time.Duration
+	client      http.Client
 }
 
-func NewRevocations(auditURL, key string) (*Revocations, error) {
+func NewRevocations(auditURL, key string, maxStale time.Duration) (*Revocations, error) {
 	u, err := url.Parse(auditURL)
 	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil {
 		return nil, errors.New("invalid audit URL for revocation polling")
@@ -30,8 +36,11 @@ func NewRevocations(auditURL, key string) (*Revocations, error) {
 	u.Path = path.Join(path.Dir(u.Path), "revoked")
 	u.RawPath = ""
 	u.RawQuery = "since=0"
+	if maxStale <= 0 {
+		maxStale = DefaultRevocationMaxStale
+	}
 	return &Revocations{
-		url: u.String(), key: []byte(key),
+		url: u.String(), key: []byte(key), maxStale: maxStale,
 		client: http.Client{
 			Timeout:       3 * time.Second,
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
@@ -48,10 +57,18 @@ func (r *Revocations) Contains(kid string) bool {
 	return found
 }
 
+// Stale reports whether the last successful snapshot is older than maxStale.
+// A cache that never refreshed successfully is stale, so scoped requests fail
+// closed during a cold start with an unreachable backend.
+func (r *Revocations) Stale(now time.Time) bool {
+	last := r.lastSuccess.Load()
+	return last == 0 || now.Sub(time.Unix(0, last)) > r.maxStale
+}
+
 // Refresh replaces the cache only after receiving a complete, valid snapshot.
 func (r *Revocations) Refresh(ctx context.Context) {
 	if err := r.refresh(ctx); err != nil && ctx.Err() == nil {
-		log.Print("gateway revocation poll failed; serving with last known revocations (freshness fail-open)")
+		log.Print("gateway revocation poll failed; scoped requests fail closed once the last snapshot is stale")
 	}
 }
 
@@ -99,6 +116,7 @@ func (r *Revocations) refresh(ctx context.Context) error {
 		kids[kid] = struct{}{}
 	}
 	r.kids.Store(&kids)
+	r.lastSuccess.Store(time.Now().UnixNano())
 	return nil
 }
 
