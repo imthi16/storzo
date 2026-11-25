@@ -286,7 +286,7 @@ func TestBodiesAndHeaders(t *testing.T) {
 // fails_when=missing names are omitted, secret values leak, or invalid limits pass;
 // no_claim=deployment environment configuration or network listener reachability.
 func TestConfigFromEnv(t *testing.T) {
-	for _, name := range []string{"STORAGE_ENDPOINT", "STORAGE_ACCESS_KEY", "STORAGE_SECRET_KEY", "CRED_SIGNING_KEY", "AUDIT_URL", "GATEWAY_LISTEN", "GATEWAY_MAX_HASHED_BODY_MB"} {
+	for _, name := range []string{"STORAGE_ENDPOINT", "STORAGE_ACCESS_KEY", "STORAGE_SECRET_KEY", "CRED_SIGNING_KEY", "AUDIT_URL", "GATEWAY_LISTEN", "GATEWAY_MAX_HASHED_BODY_MB", "GATEWAY_REVOCATION_MAX_STALE"} {
 		t.Setenv(name, "")
 	}
 	_, err := ConfigFromEnv()
@@ -304,7 +304,7 @@ func TestConfigFromEnv(t *testing.T) {
 	t.Setenv("CRED_SIGNING_KEY", signingKey)
 	t.Setenv("AUDIT_URL", "http://backend:8000/api/internal/audit")
 	c, err := ConfigFromEnv()
-	if err != nil || c.Listen != ":8333" || c.MaxHashedBodyBytes != 64<<20 || c.AuditURL != "http://backend:8000/api/internal/audit" {
+	if err != nil || c.Listen != ":8333" || c.MaxHashedBodyBytes != 64<<20 || c.AuditURL != "http://backend:8000/api/internal/audit" || c.RevocationMaxStale != 60*time.Second {
 		t.Fatalf("config=%+v err=%v", c, err)
 	}
 	for _, limit := range []string{"0", "-1", "bad", "9223372036854775807"} {
@@ -314,6 +314,21 @@ func TestConfigFromEnv(t *testing.T) {
 		}
 	}
 	t.Setenv("GATEWAY_MAX_HASHED_BODY_MB", "1")
+	t.Setenv("GATEWAY_REVOCATION_POLL_INTERVAL", "60s")
+	if c, err := ConfigFromEnv(); err != nil || c.RevocationMaxStale != 123*time.Second {
+		t.Errorf("long interval must raise the default bound: %+v err=%v", c, err)
+	}
+	t.Setenv("GATEWAY_REVOCATION_POLL_INTERVAL", "10s")
+	for _, raw := range []string{"0", "-1s", "bad", "5s", "13s", "22s"} {
+		t.Setenv("GATEWAY_REVOCATION_MAX_STALE", raw)
+		if _, err := ConfigFromEnv(); err == nil {
+			t.Errorf("accepted max stale %s", raw)
+		}
+	}
+	t.Setenv("GATEWAY_REVOCATION_MAX_STALE", "90s")
+	if c, err := ConfigFromEnv(); err != nil || c.RevocationMaxStale != 90*time.Second {
+		t.Errorf("max stale override: %+v err=%v", c, err)
+	}
 	for _, endpoint := range []string{"secret-invalid-url", "ftp://storage", "http://user:secret@storage", "http://storage/path", "http://storage?secret"} {
 		t.Setenv("STORAGE_ENDPOINT", endpoint)
 		_, err := ConfigFromEnv()

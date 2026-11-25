@@ -30,7 +30,7 @@ func run(ctx context.Context) error {
 
 // serve owns the emitter until the HTTP server has finished draining.
 func serve(ctx context.Context, cfg proxy.Config, listener net.Listener) (result error) {
-	revocations, err := audit.NewRevocations(cfg.AuditURL, cfg.CredSigningKey)
+	revocations, err := audit.NewRevocations(cfg.AuditURL, cfg.CredSigningKey, cfg.RevocationMaxStale)
 	if err != nil {
 		return err
 	}
