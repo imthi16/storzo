@@ -1,0 +1,22 @@
+services:
+  backend:
+    environment:
+      MIGRATION_ALLOW_PRIVATE_ENDPOINTS: "true"
+
+  migration-source:
+    image: chrislusf/seaweedfs:${SEAWEEDFS_TAG:-4.53_full}
+    environment:
+      AWS_ACCESS_KEY_ID: ${MIGRATION_SOURCE_ACCESS_KEY:?Missing fixture access key}
+      AWS_SECRET_ACCESS_KEY: ${MIGRATION_SOURCE_SECRET_KEY:?Missing fixture secret key}
+      WEED_ADMIN_PASSWORD: ${WEED_ADMIN_PASSWORD:?Missing secret}
+    tmpfs: [/data]
+    ports: ["127.0.0.1:18333:8333"]
+    networks: [internal]
+
+  migration-proxy:
+    image: python:3.12-slim
+    command: ["python", "/fixture/source_proxy.py"]
+    volumes:
+      - ./scripts/cloud_connect_source_proxy.py:/fixture/source_proxy.py:ro
+    ports: ["127.0.0.1:18334:8080"]
+    networks: [internal]

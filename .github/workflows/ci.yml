@@ -104,6 +104,8 @@ jobs:
   e2e:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      COMPOSE_FILE: compose.yaml:.github/fixtures/cloud-connect.compose.yaml
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
@@ -127,6 +129,11 @@ jobs:
                 ;;
             esac
           done < .env
+          for key in MIGRATION_SOURCE_ACCESS_KEY MIGRATION_SOURCE_SECRET_KEY; do
+            value=$(python -c 'import secrets; print(secrets.token_hex(24))')
+            echo "::add-mask::${value}"
+            echo "${key}=${value}" >> "$GITHUB_ENV"
+          done
       - name: Start stack and wait for ready
         run: |
           docker compose up -d --build
@@ -162,6 +169,8 @@ jobs:
         run: |
           pip install 'boto3==1.44.1'
           python scripts/gateway_e2e.py
+      - name: Cloud Connect acceptance
+        run: python scripts/cloud_connect_e2e.py
       - name: Playwright
         env:
           E2E_ADMIN_PASSWORD: ${{ env.ADMIN_PASSWORD }}
